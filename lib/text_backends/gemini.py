@@ -54,6 +54,9 @@ def _const_to_enum(node: object, *, in_subschema_map: bool = False) -> object:
        ``enum`` 仅支持字符串（proto 定义如此），整数时长枚举 ``[4,6,8]`` 转为 ``["4","6","8"]``
        后精确集合的约束解码依然成立；解析侧 ``_duration_literal`` 的机械强转恢复 int。
 
+    同一次遍历还会丢弃 schema 关键字位置的 ``additionalProperties``（Developer API 的
+    ``responseSchema`` 不支持；字段名恰好叫它时仍按子 schema 保留）。
+
     ``const`` 出现的位置有三种，须区分对待（这是正确性的不可约最小状态机）：
     - **schema 关键字**：归一（仅标量，对齐本仓库唯一的 const 形态——单值时长 Literal）；
     - **字段名**（``_SUBSCHEMA_MAP_KEYS`` 映射的 key）：当前 dict 的 key 是名字，其值仍是子 schema，
@@ -69,6 +72,10 @@ def _const_to_enum(node: object, *, in_subschema_map: bool = False) -> object:
         return {k: _const_to_enum(v) for k, v in node.items()}
     out: dict = {}
     for k, v in node.items():
+        if k == "additionalProperties":
+            # Gemini Developer API 的 responseSchema 不认识该关键字（400 INVALID_ARGUMENT）；
+            # Pydantic ``extra="forbid"`` 会渲染出它。约束解码本身不会产出未声明字段，丢弃无损。
+            continue
         if k in _INSTANCE_KEYWORDS:
             out[k] = v  # 值是实例数据，原样保留
         else:
