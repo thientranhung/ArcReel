@@ -293,6 +293,28 @@ class TestScreenplaySourceKind:
         assert "她推开门" in prompt
         assert "她推开门" not in self._normalize_prompt("novel")
 
+    def test_normalize_includes_previous_episode_outline_with_opening_bridge(self):
+        # 第二集起：上集大纲进 prompt，并要求开场用画外音承接上集预告 / 钩子
+        prompt = self._normalize_prompt(
+            "novel",
+            episode=2,
+            previous_episode_outline={
+                "title": "初入江湖",
+                "hook": "少年坠崖",
+                "story_beats": ["下山"],
+                "next_episode_teaser": "神秘人相救",
+            },
+        )
+        assert "<previous_episode_outline>" in prompt
+        assert "神秘人相救" in prompt
+        assert "承接上集" in prompt
+
+    def test_normalize_without_previous_outline_has_no_bridge_rule(self):
+        # 首集 / 上集无规划数据：不渲染上集块，也不下发承接要求
+        prompt = self._normalize_prompt("novel")
+        assert "<previous_episode_outline>" not in prompt
+        assert "承接上集" not in prompt
+
     def test_normalize_injects_pacing(self):
         # script_plan（normalize）与 prompt_authoring 一样无条件注入节奏建议，二者共享同一份 render_pacing_section("drama")
         assert self._squash(render_pacing_section("drama")) in self._squash(self._normalize_prompt("novel"))

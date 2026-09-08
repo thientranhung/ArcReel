@@ -120,6 +120,31 @@ class PlanningCursor(BaseModel):
         return _validate_rel_posix_path(value)
 
 
+def _ledger_entry(project: Mapping[str, Any], ep_num: int) -> Mapping[str, Any]:
+    return next(
+        (e for e in (project.get("episodes") or []) if isinstance(e, Mapping) and e.get("episode") == ep_num),
+        {},
+    )
+
+
+def _outline_context(entry: Mapping[str, Any]) -> dict[str, Any] | None:
+    raw_outline = entry.get("outline")
+    outline = raw_outline if isinstance(raw_outline, Mapping) else {}
+    raw_beats = outline.get("story_beats")
+    # 非 list 形状（手编损坏）按缺失处理；list 内非字符串项一并过滤——避免字符串被逐字符渲染、
+    # 或数字 / None 等脏数据原样进 script_plan prompt（与 helper 的 fail-soft 同口径）。
+    story_beats = [beat for beat in raw_beats if isinstance(beat, str)] if isinstance(raw_beats, list) else []
+    ctx: dict[str, Any] = {
+        "title": entry.get("title"),
+        "hook": entry.get("hook"),
+        "story_beats": story_beats,
+        "next_episode_teaser": outline.get("next_episode_teaser"),
+    }
+    if not ctx["hook"] and not ctx["story_beats"] and not ctx["next_episode_teaser"]:
+        return None
+    return ctx
+
+
 def episode_outline_context(
     project: Mapping[str, Any], episode: int
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
@@ -128,33 +153,23 @@ def episode_outline_context(
     大纲 dict 含 ``title`` / ``hook`` / ``story_beats`` / ``next_episode_teaser``。条目无任何
     规划数据（旧式条目，规划工具尚未写入）时对应项为 None；末集无下集，第二项为 None。
     内容抽取前移后由 script_plan（normalize）消费——剧本内容（分镜边界 / 口播）须覆盖故事节点、
-    末场落地集尾钩子；prompt_authoring 仅出视觉、不再需要大纲。
+    末场落地集尾钩子；prompt_authoring 仅出视觉、不再需要大纲。上集大纲另由
+    :func:`previous_episode_outline_context` 提供。
     """
 
-    def _entry(ep_num: int) -> Mapping[str, Any]:
-        return next(
-            (e for e in (project.get("episodes") or []) if isinstance(e, Mapping) and e.get("episode") == ep_num),
-            {},
-        )
+    return _outline_context(_ledger_entry(project, episode)), _outline_context(_ledger_entry(project, episode + 1))
 
-    def _context(entry: Mapping[str, Any]) -> dict[str, Any] | None:
-        raw_outline = entry.get("outline")
-        outline = raw_outline if isinstance(raw_outline, Mapping) else {}
-        raw_beats = outline.get("story_beats")
-        # 非 list 形状（手编损坏）按缺失处理；list 内非字符串项一并过滤——避免字符串被逐字符渲染、
-        # 或数字 / None 等脏数据原样进 script_plan prompt（与 helper 的 fail-soft 同口径）。
-        story_beats = [beat for beat in raw_beats if isinstance(beat, str)] if isinstance(raw_beats, list) else []
-        ctx: dict[str, Any] = {
-            "title": entry.get("title"),
-            "hook": entry.get("hook"),
-            "story_beats": story_beats,
-            "next_episode_teaser": outline.get("next_episode_teaser"),
-        }
-        if not ctx["hook"] and not ctx["story_beats"] and not ctx["next_episode_teaser"]:
-            return None
-        return ctx
 
-    return _context(_entry(episode)), _context(_entry(episode + 1))
+def previous_episode_outline_context(project: Mapping[str, Any], episode: int) -> dict[str, Any] | None:
+    """从分集账本提取上集大纲，供 script_plan 设计本集开场的承接。
+
+    首集（``episode <= 1``）或上集条目无规划数据时返回 None——此时提示词不渲染上集块，
+    调用方也不把该键写进 basis，存量项目与首集的冻结基线不受影响。
+    """
+
+    if episode <= 1:
+        return None
+    return _outline_context(_ledger_entry(project, episode - 1))
 
 
 def normalize_source_text(text: str) -> str:

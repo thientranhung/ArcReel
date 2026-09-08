@@ -579,6 +579,40 @@ async def test_normalize_drama_script_injects_episode_outline(fake_ctx: ToolCont
     prompt_text = out["content"][0]["text"]
     assert "少年下山" in prompt_text
     assert "少年坠崖生死未卜" in prompt_text
+    assert "<previous_episode_outline>" not in prompt_text
+
+
+async def test_normalize_drama_script_injects_previous_episode_outline(fake_ctx: ToolContext) -> None:
+    """第二集的 script_plan prompt 带上集大纲（预告语 / 钩子），要求开场承接上集。"""
+
+    project_path = fake_ctx.project_path
+    src = project_path / "source"
+    src.mkdir(parents=True)
+    (src / "episode_2.txt").write_text("次日，山下", encoding="utf-8")
+    fake_ctx.pm.project_payload["episodes"] = [
+        {
+            "episode": 1,
+            "title": "初入江湖",
+            "hook": "少年坠崖生死未卜",
+            "outline": {"story_beats": ["少年下山"], "next_episode_teaser": "神秘人从崖底带走了他"},
+        },
+        {
+            "episode": 2,
+            "title": "绝处逢生",
+            "hook": "神秘人的真实身份",
+            "outline": {"story_beats": ["崖底疗伤"], "next_episode_teaser": None},
+        },
+    ]
+
+    use_fake_caps(fake_ctx)
+    tool_obj = generate_script_plan_tool(fake_ctx)
+    out = await call(tool_obj, {"episode": 2, "dry_run": True})
+    assert out.get("is_error") is not True, out
+    prompt_text = out["content"][0]["text"]
+    assert "<previous_episode_outline>" in prompt_text
+    assert "神秘人从崖底带走了他" in prompt_text
+    assert "承接上集" in prompt_text
+    assert "崖底疗伤" in prompt_text
 
 
 async def test_normalize_drama_script_passes_project_name_to_backend(fake_ctx: ToolContext, monkeypatch) -> None:

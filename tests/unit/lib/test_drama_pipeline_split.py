@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from lib.episode_ledger import episode_outline_context
+from lib.episode_ledger import episode_outline_context, previous_episode_outline_context
 from lib.script_models import (
     DramaEpisodeScript,
     DramaNormalizedScript,
@@ -273,3 +273,16 @@ class TestEpisodeOutlineContext:
         cur, _ = episode_outline_context(project, 1)
         assert cur is not None
         assert cur["story_beats"] == ["下山", "遇敌"]
+
+    def test_previous_outline_for_second_episode(self):
+        # 第二集的上集大纲来自第一集条目，含承接开场所需的预告语与钩子
+        prev = previous_episode_outline_context(self._project(), 2)
+        assert prev is not None
+        assert prev["title"] == "初入江湖"
+        assert prev["hook"] == "少年坠崖"
+        assert prev["next_episode_teaser"] == "神秘人相救"
+
+    def test_previous_outline_absent_for_first_episode_or_legacy_entry(self):
+        # 首集没有上集；上集是旧式条目（无规划数据）时同样为 None，提示词不渲染上集块
+        assert previous_episode_outline_context(self._project(), 1) is None
+        assert previous_episode_outline_context(self._project(), 3) is None
