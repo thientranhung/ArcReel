@@ -10,7 +10,7 @@ from typing import Any
 
 import httpx
 
-from lib.ark_shared import create_ark_client
+from lib.ark_shared import ark_api_model_name, create_ark_client
 from lib.logging_utils import format_kwargs_for_log
 from lib.providers import PROVIDER_ARK
 from lib.retry import with_retry_async
@@ -107,6 +107,7 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
     ):
         self._client = create_ark_client(api_key=api_key, base_url=base_url)
         self._model = model or self.DEFAULT_MODEL
+        self._base_url = base_url
         # service_tier 参数仅 seedance-1.x 等老模型支持；2.0 上游在 r2v 下会 400 拒绝该参数，
         # 必须不下传。2.5 按同代口径一并剔除，该口径系从 2.0 的拒绝行为推断，收窄判定
         # 只影响 2.5 一支。判定见 _is_seedance_2 / _is_seedance_2_5：用
@@ -124,6 +125,15 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
     @property
     def model(self) -> str:
         return self._model
+
+    @property
+    def _api_model(self) -> str:
+        """发往站点的 API model ID。
+
+        registry 键（能力表 / 计费 / 产物记录）与站点定名分离：BytePlus 的 Seedance 叫
+        dreamina-…，见 ark_api_model_name。base_url 缺省（含绕过 __init__ 的测试替身）按国内站原样发出。
+        """
+        return ark_api_model_name(self._model, getattr(self, "_base_url", None))
 
     @staticmethod
     def _is_seedance_2(model: str) -> bool:
@@ -393,7 +403,7 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
         # 比例优先：ratio 是独立 SDK 字段，由 aspect_ratio 直接决定；resolution 仅清晰度档位，
         # 与比例正交（SDK 内部按 ratio×resolution 算像素），不把比例压进像素 size，故无尺寸 bug。
         create_params = {
-            "model": self._model,
+            "model": self._api_model,
             "content": content,
             "ratio": request.aspect_ratio,
             "duration": request.duration_seconds,

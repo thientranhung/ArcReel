@@ -651,6 +651,36 @@ class TestArkServiceTierParam:
 
 
 class TestArkVideoBackendBaseUrl:
+    async def test_byteplus_base_url_sends_dreamina_model_id_but_reports_registry_key(self, tmp_path):
+        """BytePlus 站点：请求体用对方定名（dreamina-…），产物记录仍用 registry 键（能力 / 计费按它查）。"""
+        client = MagicMock()
+        create_result = MagicMock()
+        create_result.id = "cgt-byteplus"
+        client.content_generation.tasks.create = MagicMock(return_value=create_result)
+        get_result = MagicMock()
+        get_result.status = "succeeded"
+        get_result.content = MagicMock()
+        get_result.content.video_url = "https://cdn.example.com/bp.mp4"
+        get_result.seed = 1
+        get_result.usage = None
+        client.content_generation.tasks.get = MagicMock(return_value=get_result)
+        with patch("lib.video_backends.ark.create_ark_client", return_value=client):
+            backend = ArkVideoBackend(
+                api_key="k",
+                model="doubao-seedance-2-5-260628",
+                base_url="https://ark.ap-southeast.bytepluses.com/api/v3",
+            )
+        patcher = _mock_httpx_stream()
+        try:
+            result = await backend.generate(
+                VideoGenerationRequest(prompt="dawn over the sea", output_path=tmp_path / "bp.mp4", duration_seconds=8)
+            )
+        finally:
+            patcher.stop()
+        assert client.content_generation.tasks.create.call_args.kwargs["model"] == "dreamina-seedance-2-5-260628"
+        assert result.model == "doubao-seedance-2-5-260628"
+        assert backend.model == "doubao-seedance-2-5-260628"
+
     def test_custom_base_url_passed_through(self):
         with captured_ark_clients("lib.video_backends.ark") as created:
             ArkVideoBackend(api_key="k", base_url="https://ark.cn-beijing.volces.com/api/plan/v3")
