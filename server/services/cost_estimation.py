@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -19,6 +19,7 @@ from lib.config.resolver import (
     video_bucket_for_generation_mode,
 )
 from lib.cost_calculator import cost_calculator
+from lib.cost_estimate import UnitCostInput, estimate_unit_cost
 from lib.db.repositories.custom_provider_repo import CustomProviderRepository
 from lib.db.repositories.usage_repo import PROJECT_LEVEL_SEGMENT_KEY, UsageRepository
 from lib.generation_queue import GenerationQueue
@@ -164,6 +165,65 @@ async def quote_video_request(
             exc_info=True,
         )
         return None
+
+
+async def estimate_generation_unit_costs(
+    *,
+    action_type: str,
+    requested_ids: Sequence[str],
+    project: dict[str, Any] | None,
+    config_resolver: ConfigResolver,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> dict[str, UnitCostInput]:
+    """Resolve one ``cost_estimate`` per requested unit for a non-video generation action.
+
+    Generalizes ``quote_video_request`` to image (``generate_asset_sheets`` /
+    ``generate_storyboards`` / ``generate_grid``) actions: resolves the current
+    provider/model once for the whole action (they share one project-level
+    backend, not a per-unit one), quotes it once at the fallback image
+    resolution tier used for cost display elsewhere in this module
+    (``_IMAGE_PRICING_FALLBACK_RESOLUTION``), and repeats it per requested id.
+
+    ``generate_tts`` / ``regenerate_tts`` units are returned unpriced
+    (``None``): an exact per-unit character count requires the full speech
+    composition pass (``lib.narration_delivery``), which this preview-time
+    seam does not otherwise run. Surfacing them via ``unpriced_units`` is the
+    documented, non-raising fallback (``lib.cost_estimate.estimate_unit_cost``)
+    rather than showing a misleading zero.
+    """
+
+    ids = list(requested_ids)
+    if not ids:
+        return {}
+    if action_type in {"generate_tts", "regenerate_tts"}:
+        return dict.fromkeys(ids, None)
+
+    generation_type = "i2i" if action_type == "generate_asset_sheets" else "t2i"
+    try:
+        resolved = await config_resolver.resolve_image_backend(project, None, generation_type=generation_type)
+        provider_id, model_id = resolved.provider_id, resolved.model_id
+    except Exception:
+        logger.debug("cost_estimate: 无法解析 %s 的图片 provider/model", action_type, exc_info=True)
+        return dict.fromkeys(ids, None)
+
+    try:
+        async with session_factory() as session:
+            price = await CustomProviderRepository(session).resolve_price(provider_id, model_id)
+    except Exception:
+        logger.debug("cost_estimate: 无法查询 %s/%s 的自定义供应商单价", provider_id, model_id, exc_info=True)
+        return dict.fromkeys(ids, None)
+
+    resolution = GRID_FALLBACK_RESOLUTION if action_type == "generate_grid" else _IMAGE_PRICING_FALLBACK_RESOLUTION
+    estimate = estimate_unit_cost(
+        call_type="image",
+        provider_id=provider_id,
+        model_id=model_id,
+        resolution=resolution,
+        custom_price_input=price.price_input,
+        custom_price_output=price.price_output,
+        custom_currency=price.currency,
+    )
+    return dict.fromkeys(ids, estimate)
 
 
 def _add_cost(target: CostBreakdown, amount: float, currency: str) -> None:

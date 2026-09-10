@@ -7,6 +7,7 @@ from typing import Any, cast
 import pytest
 
 from lib.batch_admission import (
+    COST_CONFIRMATION_CODE,
     BatchAdmission,
     BatchAdmissionDecision,
     UnitAdmissionTicket,
@@ -100,6 +101,67 @@ def test_a_real_blocker_outranks_pending_consent():
     )
 
     assert admission.decision is BatchAdmissionDecision.BLOCKED
+
+
+def _cost_confirmation_ticket(unit_id: str, *, amount: float, currency: str = "USD") -> UnitAdmissionTicket:
+    return UnitAdmissionTicket(
+        unit_id=unit_id,
+        problems=(
+            GenerationProblem(
+                code=COST_CONFIRMATION_CODE,
+                detail="预估费用超过项目费用阈值",
+                action=GenerationAction.CONFIRM_REQUEST_DURATION,
+                params={},
+            ),
+        ),
+        request_cost={"amount": amount, "currency": currency},
+    )
+
+
+def test_cost_confirmation_is_consent_only():
+    """单独的费用阈值确认与档位确认走同一条 consent-only 路径，不当作受阻。"""
+
+    admission = _admission(UnitAdmissionTicket(unit_id="E1U1"), _cost_confirmation_ticket("E1U2", amount=25.0))
+
+    assert admission.decision is BatchAdmissionDecision.CONFIRMATION_REQUIRED
+
+
+def test_cost_confirmation_folds_into_confirmation_tiers():
+    admission = _admission(_cost_confirmation_ticket("E1U1", amount=25.0))
+
+    tiers = admission.confirmation_tiers()
+
+    assert len(tiers) == 1
+    assert tiers[0].unit_ids == ("E1U1",)
+    assert tiers[0].cost_amount == pytest.approx(25.0)
+    assert tiers[0].cost_currency == "USD"
+
+
+def test_duration_and_cost_confirmation_on_the_same_ticket_is_still_consent_only():
+    """同一票既要确认档位又要确认费用，仍属可由用户一次同意清空的口子，不升级为受阻。"""
+
+    ticket = UnitAdmissionTicket(
+        unit_id="E1U1",
+        problems=(
+            GenerationProblem(
+                code="reference_duration_confirmation_required",
+                detail="档位与当前视觉不一致",
+                action=GenerationAction.CONFIRM_REQUEST_DURATION,
+                params={},
+            ),
+            GenerationProblem(
+                code=COST_CONFIRMATION_CODE,
+                detail="预估费用超过项目费用阈值",
+                action=GenerationAction.CONFIRM_REQUEST_DURATION,
+                params={},
+            ),
+        ),
+        request_cost={"amount": 25.0, "currency": "USD"},
+    )
+    admission = _admission(ticket)
+
+    assert admission.decision is BatchAdmissionDecision.CONFIRMATION_REQUIRED
+    assert admission.confirmation_tiers()[0].cost_amount == pytest.approx(25.0)
 
 
 def test_confirmation_tiers_group_by_request_duration_with_totals():

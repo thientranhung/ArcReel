@@ -155,7 +155,11 @@ def test_post_production_keeps_video_executable_when_tts_is_missing() -> None:
     assert _step(plan, "narration_delivery").state is WorkflowStepState.COMPLETED
     assert _step(plan, "video").state is WorkflowStepState.READY
     assert _step(plan, "video").artifacts["missing_ids"] == ["E1S01"]
-    assert plan.next_action == status.next_action
+    # cost_estimate is attached on top of the otherwise-unchanged status.next_action (its one
+    # ticket carries no request_cost, so the unit is reported unpriced rather than priced).
+    assert plan.next_action == status.next_action.model_copy(update={"cost_estimate": plan.next_action.cost_estimate})
+    assert plan.next_action.cost_estimate is not None
+    assert plan.next_action.cost_estimate.unpriced_units == ["E1S01"]
 
 
 def _status_with_blocked_audio() -> WorkflowStatus:
@@ -350,3 +354,82 @@ def test_stale_video_remains_exportable_without_an_implicit_regeneration_step() 
     assert video.artifacts["stale_ids"] == ["E1S01"]
     assert video.action is None
     assert plan.next_action.type == "export"
+
+
+class TestCostEstimate:
+    def test_generate_videos_derives_cost_estimate_from_admission(self) -> None:
+        status = _status(action="generate_videos", requested_ids=["E1S01"])
+        admission = BatchAdmission(
+            operation="generate_videos",
+            selection=GenerationSelectionMode.MISSING_ONLY,
+            narration_delivery=POST_PRODUCTION,
+            tickets=(UnitAdmissionTicket(unit_id="E1S01", request_cost={"amount": 1.5, "currency": "USD"}),),
+        )
+
+        plan = build_workflow_plan(
+            status,
+            narration_delivery=POST_PRODUCTION,
+            admission=admission.to_payload(),
+        )
+
+        cost_estimate = plan.next_action.cost_estimate
+        assert cost_estimate is not None
+        assert cost_estimate.units["E1S01"].amount == pytest.approx(1.5)
+        assert cost_estimate.total is not None
+        assert cost_estimate.total.amount == pytest.approx(1.5)
+        assert cost_estimate.threshold == "ok"
+
+    def test_non_video_action_uses_supplied_unit_cost_estimates(self) -> None:
+        status = _status(state="ASSET_SHEETS", action="generate_asset_sheets", requested_ids=["char-1"])
+
+        plan = build_workflow_plan(
+            status,
+            unit_cost_estimates={"char-1": {"amount": 2.0, "currency": "USD"}},
+        )
+
+        cost_estimate = plan.next_action.cost_estimate
+        assert cost_estimate is not None
+        assert cost_estimate.total is not None
+        assert cost_estimate.total.amount == pytest.approx(2.0)
+
+    def test_action_type_outside_generation_set_has_no_cost_estimate(self) -> None:
+        status = _status(state="EXPORT_READY", action="export")
+        status.artifacts["videos"] = {"current_ids": ["E1S01"], "stale_ids": [], "missing_ids": []}
+        status.next_action = WorkflowNextAction(type=WorkflowActionType.EXPORT, reason="usable media is ready")
+
+        plan = build_workflow_plan(status, unit_cost_estimates={"E1S01": {"amount": 2.0, "currency": "USD"}})
+
+        assert plan.next_action.cost_estimate is None
+
+    def test_hard_threshold_requires_confirmation_unless_already_confirmed(self) -> None:
+        status = _status(state="ASSET_SHEETS", action="generate_asset_sheets", requested_ids=["char-1"])
+
+        unconfirmed = build_workflow_plan(
+            status,
+            unit_cost_estimates={"char-1": {"amount": 25.0, "currency": "USD"}},
+            cost_thresholds_usd_override=(5.0, 20.0),
+        )
+        assert unconfirmed.next_action.cost_estimate.threshold == "confirm"
+        assert unconfirmed.next_action.requires_confirmation is True
+
+        confirmed = build_workflow_plan(
+            status,
+            unit_cost_estimates={"char-1": {"amount": 25.0, "currency": "USD"}},
+            cost_thresholds_usd_override=(5.0, 20.0),
+            confirmed_cost=True,
+        )
+        assert confirmed.next_action.cost_estimate.threshold == "confirm"
+        assert confirmed.next_action.requires_confirmation is False
+
+    def test_unpriced_units_do_not_gate_confirmation(self) -> None:
+        status = _status(state="ASSET_SHEETS", action="generate_asset_sheets", requested_ids=["char-1"])
+
+        plan = build_workflow_plan(
+            status,
+            unit_cost_estimates={"char-1": None},
+            cost_thresholds_usd_override=(5.0, 20.0),
+        )
+
+        assert plan.next_action.cost_estimate.threshold == "ok"
+        assert plan.next_action.cost_estimate.unpriced_units == ["char-1"]
+        assert plan.next_action.requires_confirmation is False

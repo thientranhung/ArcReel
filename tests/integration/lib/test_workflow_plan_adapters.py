@@ -7,6 +7,8 @@ import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
+from lib.batch_admission import BatchAdmission, UnitAdmissionTicket
+from lib.generation_result import GenerationSelectionMode
 from lib.narration_delivery import POST_PRODUCTION
 from lib.project_manager import ProjectManager
 from lib.workflow_plan import WorkflowPlanRequest, build_workflow_plan
@@ -114,6 +116,45 @@ async def test_rest_and_mcp_serialize_the_same_workflow_plan(tmp_path: Path, mon
         ("demo", WorkflowPlanRequest.model_validate(payload), "default"),
         ("demo", WorkflowPlanRequest.model_validate(payload), "u1"),
     ]
+
+
+class _CostPlanner:
+    async def get_plan(
+        self,
+        project_name: str,
+        request: WorkflowPlanRequest,
+        *,
+        user_id: str,
+        queue=None,
+        config_resolver=None,
+    ):
+        admission = BatchAdmission(
+            operation="generate_videos",
+            selection=GenerationSelectionMode.MISSING_ONLY,
+            narration_delivery=request.narration_delivery or POST_PRODUCTION,
+            tickets=(UnitAdmissionTicket(unit_id="E1S01", request_cost={"amount": 1.25, "currency": "USD"}),),
+        )
+        return build_workflow_plan(
+            _status(),
+            narration_delivery=request.narration_delivery,
+            admission=admission.to_payload(),
+        )
+
+
+async def test_get_workflow_plan_mcp_tool_returns_cost_estimate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pm = _project(tmp_path)
+    monkeypatch.setattr(workflow_planner, "get_workflow_planner", lambda _pm=None: _CostPlanner())
+    ctx = ToolContext(project_name="demo", projects_root=tmp_path / "projects", pm=pm)
+
+    result = await get_workflow_plan_tool(ctx).handler({"episode": 1, "narration_delivery": POST_PRODUCTION})
+    body = json.loads(result["content"][0]["text"])
+
+    cost_estimate = body["workflow_plan"]["next_action"]["cost_estimate"]
+    assert cost_estimate["units"]["E1S01"] == {"amount": 1.25, "currency": "USD"}
+    assert cost_estimate["total"] == {"amount": 1.25, "currency": "USD"}
+    assert cost_estimate["threshold"] == "ok"
 
 
 async def test_workflow_plan_mcp_rejects_invalid_transient_choice_before_service(

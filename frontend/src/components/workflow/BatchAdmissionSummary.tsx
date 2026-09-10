@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { formatCurrencyAmount } from "@/utils/cost-format";
-import type { WorkflowAdmission } from "@/types/workflow";
+import type { WorkflowAdmission, WorkflowCostEstimate } from "@/types/workflow";
 import { ProblemList } from "./ProblemList";
 import { UnitTag } from "./UnitTag";
 import { admissionUnitViews, isWithheld } from "./problem-views";
@@ -9,7 +9,30 @@ interface Props {
   admission: WorkflowAdmission;
   /** 已有产物、本次跳过的单元数；批量端点才有这份信息。 */
   skippedUnitIds?: string[];
+  /** `next_action.cost_estimate`，未随批量端点返回时留空——不阻塞既有调用方。 */
+  costEstimate?: WorkflowCostEstimate | null;
   className?: string;
+}
+
+/** `next_action.cost_estimate` 的阈值徽标：warn/confirm 才显示，ok 时不占地方。 */
+export function CostEstimateBadge({ costEstimate }: { costEstimate: WorkflowCostEstimate | null | undefined }) {
+  const { t } = useTranslation("workflow");
+  if (!costEstimate || costEstimate.threshold === "ok") return null;
+  const totalText = costEstimate.total
+    ? formatCurrencyAmount(costEstimate.total.currency, costEstimate.total.amount)
+    : t("tier_cost_unknown");
+  const key = costEstimate.threshold === "confirm" ? "cost_estimate_confirm" : "cost_estimate_warn";
+  return (
+    <p
+      role="status"
+      style={{ color: costEstimate.threshold === "confirm" ? "var(--color-danger)" : "var(--color-text-3)" }}
+    >
+      {t(key, { cost: totalText })}
+      {costEstimate.unpriced_units.length > 0
+        ? ` ${t("cost_estimate_unpriced", { count: costEstimate.unpriced_units.length })}`
+        : ""}
+    </p>
+  );
 }
 
 /**
@@ -25,7 +48,7 @@ interface Props {
  * 正文与外壳分开：参考生视频把它装进弹窗当场拍板，工作流面板把它就地摊在视频步骤下，
  * 两处陈述同一份结论、共用同一段判定，不各推一遍。
  */
-export function BatchAdmissionSummary({ admission, skippedUnitIds, className }: Props) {
+export function BatchAdmissionSummary({ admission, skippedUnitIds, costEstimate, className }: Props) {
   const { t } = useTranslation("workflow");
   const blocked = admission.decision === "blocked";
   const tiers = admission.confirmation?.tiers ?? [];
@@ -40,6 +63,7 @@ export function BatchAdmissionSummary({ admission, skippedUnitIds, className }: 
 
   return (
     <div className={className ?? "space-y-2 text-[12.5px] leading-relaxed"}>
+      <CostEstimateBadge costEstimate={costEstimate} />
       {blocked ? (
         <>
           <p style={{ color: "var(--color-text-3)" }}>{t("admission_blocked_intro")}</p>

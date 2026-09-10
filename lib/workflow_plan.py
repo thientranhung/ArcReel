@@ -8,10 +8,18 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from lib.asset_types import ASSET_SPECS
+from lib.config.cost_thresholds import cost_thresholds_usd
+from lib.cost_estimate import UnitCostInput, aggregate_cost_estimate
 from lib.generation_result import GenerationAction, GenerationProblem, ProviderCheckpoint
 from lib.narration_delivery import POST_PRODUCTION, USE_TTS, NarrationDelivery
 from lib.workflow_rules import WorkflowStepRule, workflow_rule
-from lib.workflow_state import WorkflowActionType, WorkflowBlocker, WorkflowNextAction, WorkflowStatus
+from lib.workflow_state import (
+    WorkflowActionType,
+    WorkflowBlocker,
+    WorkflowCostEstimate,
+    WorkflowNextAction,
+    WorkflowStatus,
+)
 
 PositiveStrictInt = Annotated[int, Field(strict=True, gt=0)]
 
@@ -35,6 +43,10 @@ class WorkflowPlanRequest(BaseModel):
     episode: int | None = Field(default=None, ge=1, strict=True)
     narration_delivery: NarrationDelivery | None = None
     confirmed_request_durations: dict[str, PositiveStrictInt] = Field(default_factory=dict)
+    confirmed_cost: bool = False
+    """Mirrors ``confirmed_request_durations``: explicit consent to a quote that
+    crosses the project's (or global default) hard cost threshold — see
+    ``lib.batch_admission.COST_CONFIRMATION_CODE``."""
 
     @field_validator("confirmed_request_durations")
     @classmethod
@@ -204,6 +216,78 @@ def _structure_action(
     )
 
 
+_COST_ESTIMATE_ACTIONS = frozenset(
+    {
+        WorkflowActionType.GENERATE_VIDEOS,
+        WorkflowActionType.GENERATE_STORYBOARDS,
+        WorkflowActionType.GENERATE_GRID,
+        WorkflowActionType.GENERATE_ASSET_SHEETS,
+        WorkflowActionType.GENERATE_TTS,
+        WorkflowActionType.REGENERATE_TTS,
+    }
+)
+
+
+def _unit_costs_from_admission(admission: dict[str, Any] | None) -> dict[str, UnitCostInput]:
+    """Read the already-quoted per-unit cost off the batch admission's tickets.
+
+    ``generate_videos`` needs no separate resolution pass: ``video_batch_admission``
+    already quotes every unit's ``request_cost`` for the duration-confirmation UI, and
+    this is the exact same figure a submission would be charged.
+    """
+
+    if not admission:
+        return {}
+    units: dict[str, UnitCostInput] = {}
+    for unit in admission.get("units", []):
+        if not isinstance(unit, dict):
+            continue
+        unit_id = unit.get("unit_id")
+        if isinstance(unit_id, str) and unit_id:
+            units[unit_id] = unit.get("request_cost")
+    return units
+
+
+def _with_cost_estimate(
+    next_action: WorkflowNextAction,
+    *,
+    admission: dict[str, Any] | None,
+    unit_cost_estimates: dict[str, UnitCostInput] | None,
+    confirmed_cost: bool,
+    soft_threshold_usd: float,
+    hard_threshold_usd: float,
+) -> WorkflowNextAction:
+    """Attach ``cost_estimate`` to a generation ``next_action`` and gate on its threshold.
+
+    A ``"confirm"`` threshold sets ``requires_confirmation`` unless the caller already
+    consented (``confirmed_cost``) — mirroring ``confirmed_request_durations``. For
+    ``generate_videos`` this ORs with whatever ``_admission_action`` already decided
+    (its own confirmation may come from a duration tier, a cost tier, or both, already
+    folded by ``lib.batch_admission.BatchAdmission.decision``).
+    """
+
+    if next_action.type not in _COST_ESTIMATE_ACTIONS or not next_action.requested_ids:
+        return next_action
+    source = (
+        _unit_costs_from_admission(admission)
+        if next_action.type is WorkflowActionType.GENERATE_VIDEOS
+        else (unit_cost_estimates or {})
+    )
+    if not source:
+        return next_action
+    units = {unit_id: source.get(unit_id) for unit_id in next_action.requested_ids}
+    payload = aggregate_cost_estimate(
+        units, soft_threshold_usd=soft_threshold_usd, hard_threshold_usd=hard_threshold_usd
+    )
+    cost_estimate = WorkflowCostEstimate.model_validate(payload)
+    requires_confirmation = next_action.requires_confirmation or (
+        cost_estimate.threshold == "confirm" and not confirmed_cost
+    )
+    return next_action.model_copy(
+        update={"cost_estimate": cost_estimate, "requires_confirmation": requires_confirmation}
+    )
+
+
 def _admission_action(
     admission: dict[str, Any],
     problems: list[GenerationProblem],
@@ -228,8 +312,19 @@ def build_workflow_plan(
     script_revision: str | None = None,
     task_observations: list[WorkflowTaskObservation] | None = None,
     admission: dict[str, Any] | None = None,
+    unit_cost_estimates: dict[str, UnitCostInput] | None = None,
+    confirmed_cost: bool = False,
+    cost_thresholds_usd_override: tuple[float, float] | None = None,
 ) -> WorkflowPlan:
-    """Project one immutable status snapshot and transient request observations."""
+    """Project one immutable status snapshot and transient request observations.
+
+    ``unit_cost_estimates`` carries per-``requested_ids`` cost for generation
+    actions this module cannot price itself without I/O (image / audio): the
+    async adapter (``server.services.workflow_planner``) resolves the current
+    provider/model and any custom price, then hands in already-serialized
+    amounts. ``generate_videos`` needs no such input — its cost is read
+    straight off ``admission`` (already quoted by ``video_batch_admission``).
+    """
 
     rule = workflow_rule(status.project.content_mode, status.project.generation_mode)
     rules = rule.steps
@@ -343,6 +438,21 @@ def build_workflow_plan(
         video_step.action = next_action
     else:
         next_action = status.next_action
+
+    original_next_action = next_action
+    soft_threshold_usd, hard_threshold_usd = cost_thresholds_usd_override or cost_thresholds_usd(None)
+    next_action = _with_cost_estimate(
+        next_action,
+        admission=admission,
+        unit_cost_estimates=unit_cost_estimates,
+        confirmed_cost=confirmed_cost,
+        soft_threshold_usd=soft_threshold_usd,
+        hard_threshold_usd=hard_threshold_usd,
+    )
+    if next_action is not original_next_action:
+        for step in steps:
+            if step.action is original_next_action:
+                step.action = next_action
 
     return WorkflowPlan(
         status=status,

@@ -8,7 +8,10 @@ from pathlib import Path
 from typing import Any
 
 from lib.asset_types import ASSET_SPECS
+from lib.config.cost_thresholds import cost_thresholds_usd
 from lib.config.resolver import ConfigResolver
+from lib.cost_estimate import UnitCostInput
+from lib.db import async_session_factory
 from lib.db.base import DEFAULT_USER_ID
 from lib.generation_queue import GenerationQueue, get_generation_queue
 from lib.generation_queue_client import get_active_tasks_for_resources
@@ -37,6 +40,7 @@ from lib.workflow_plan import (
     build_workflow_plan,
 )
 from lib.workflow_state import WorkflowBlocker, WorkflowStateService, WorkflowStatus
+from server.services.cost_estimation import estimate_generation_unit_costs
 from server.services.video_batch_admission import (
     active_task_problem,
     admit_reference_video_batch,
@@ -99,6 +103,7 @@ class WorkflowPlanner:
         facts = await self._script_facts(project_name, status)
         structure_problems = self._structure_problems(facts)
         tasks = await self._active_tasks(project_name, status, facts, request, user_id=user_id, queue=queue)
+        thresholds = cost_thresholds_usd(facts.project if facts is not None else None)
         admission = None
         if (
             facts is not None
@@ -115,6 +120,14 @@ class WorkflowPlanner:
                 user_id=user_id,
                 queue=queue,
                 config_resolver=config_resolver,
+                cost_hard_threshold_usd=thresholds[1],
+            )
+        unit_cost_estimates = None
+        if facts is not None and not structure_problems and not status.next_action.requires_confirmation:
+            unit_cost_estimates = await self._unit_cost_estimates(
+                status,
+                facts,
+                config_resolver=config_resolver,
             )
         return build_workflow_plan(
             status,
@@ -123,6 +136,44 @@ class WorkflowPlanner:
             script_revision=facts.revision if facts is not None else None,
             task_observations=tasks,
             admission=admission,
+            unit_cost_estimates=unit_cost_estimates,
+            confirmed_cost=request.confirmed_cost,
+            cost_thresholds_usd_override=thresholds,
+        )
+
+    @staticmethod
+    async def _unit_cost_estimates(
+        status: WorkflowStatus,
+        facts: _ScriptFacts,
+        *,
+        config_resolver: ConfigResolver | None,
+    ) -> dict[str, UnitCostInput] | None:
+        """Resolve per-unit cost for the image/audio generation actions.
+
+        ``generate_videos`` is excluded — it is priced from ``admission`` instead
+        (already the exact submission quote). A resolver-less call site (none of
+        this project's current callers omit it, but ``config_resolver`` is
+        optional elsewhere) skips estimation rather than opening its own session.
+        """
+
+        action_type = status.next_action.type.value
+        if action_type not in {
+            "generate_asset_sheets",
+            "generate_storyboards",
+            "generate_grid",
+            "generate_tts",
+            "regenerate_tts",
+        }:
+            return None
+        if not status.next_action.requested_ids:
+            return None
+        resolver = config_resolver or ConfigResolver(async_session_factory)
+        return await estimate_generation_unit_costs(
+            action_type=action_type,
+            requested_ids=status.next_action.requested_ids,
+            project=facts.project,
+            config_resolver=resolver,
+            session_factory=async_session_factory,
         )
 
     async def _migration_problem(self, project_name: str, blocker: WorkflowBlocker) -> GenerationProblem:
@@ -304,6 +355,7 @@ class WorkflowPlanner:
         user_id: str,
         queue: GenerationQueue,
         config_resolver: ConfigResolver | None,
+        cost_hard_threshold_usd: float | None = None,
     ) -> dict[str, Any]:
         options = ReferenceRequestOptions(narration_delivery=request.narration_delivery or "post_production")
         if status.project.generation_mode == "reference_video":
@@ -327,6 +379,8 @@ class WorkflowPlanner:
                 operation=status.next_action.type,
                 selection=selection.mode,
                 confirmed_request_durations=request.confirmed_request_durations,
+                confirmed_cost=request.confirmed_cost,
+                cost_hard_threshold_usd=cost_hard_threshold_usd,
                 spec_check=lambda unit: reference_unit_task_spec(unit, facts.script_file),
                 extra_tickets=extra,
                 user_id=user_id,
@@ -372,6 +426,8 @@ class WorkflowPlanner:
             operation=status.next_action.type,
             selection=GenerationSelectionMode.MISSING_ONLY,
             confirmed_request_durations=request.confirmed_request_durations,
+            confirmed_cost=request.confirmed_cost,
+            cost_hard_threshold_usd=cost_hard_threshold_usd,
             extra_tickets=refused,
             user_id=user_id,
             queue=queue,

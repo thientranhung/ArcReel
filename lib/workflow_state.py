@@ -152,6 +152,31 @@ class WorkflowActionType(StrEnum):
     RETRY_ARTIFACT_DOWNLOAD = "retry_artifact_download"
 
 
+class WorkflowCostAmount(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    amount: float
+    currency: str
+
+
+class WorkflowCostEstimate(BaseModel):
+    """Per-unit and aggregate cost projection for a generation ``next_action``.
+
+    ``total`` is ``None`` when no unit is priced, or when priced units span
+    more than one currency (a partial sum would misstate what the user is
+    agreeing to). ``threshold`` is only evaluated against a USD ``total``;
+    any other case — including a ``None`` total — reports ``"ok"``, and the
+    caller can still see the gap via ``unpriced_units``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    units: dict[str, WorkflowCostAmount] = Field(default_factory=dict)
+    total: WorkflowCostAmount | None = None
+    unpriced_units: list[str] = Field(default_factory=list)
+    threshold: Literal["ok", "warn", "confirm"] = "ok"
+
+
 class WorkflowNextAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -160,6 +185,9 @@ class WorkflowNextAction(BaseModel):
     requested_ids: list[str] = Field(default_factory=list)
     requires_confirmation: bool = False
     reason: str
+    cost_estimate: WorkflowCostEstimate | None = None
+    """Optional: absent/``None`` for action types that do not project cost, and for
+    legacy callers that have not been updated to compute one (backward compatible)."""
 
 
 class WorkflowStatus(BaseModel):
