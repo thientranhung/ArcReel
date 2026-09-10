@@ -62,6 +62,35 @@ async def test_system_settings(config_service: ConfigService):
     assert val == "gemini-vertex/veo-3.1-fast-generate-001"
 
 
+async def test_visual_qa_external_command_defaults_to_none(config_service: ConfigService):
+    assert await config_service.get_visual_qa_external_command() is None
+
+
+async def test_visual_qa_external_command_round_trips(config_service: ConfigService):
+    await config_service.set_visual_qa_external_command(
+        "codex exec -i {image} --output-schema {output_schema} {prompt}"
+    )
+
+    assert (
+        await config_service.get_visual_qa_external_command()
+        == "codex exec -i {image} --output-schema {output_schema} {prompt}"
+    )
+
+
+async def test_visual_qa_external_command_blank_value_clears_to_none(config_service: ConfigService):
+    await config_service.set_visual_qa_external_command("codex exec")
+    await config_service.set_visual_qa_external_command("   ")
+
+    assert await config_service.get_visual_qa_external_command() is None
+
+
+async def test_visual_qa_external_command_none_clears(config_service: ConfigService):
+    await config_service.set_visual_qa_external_command("codex exec")
+    await config_service.set_visual_qa_external_command(None)
+
+    assert await config_service.get_visual_qa_external_command() is None
+
+
 async def test_video_poll_timeout_defaults_and_round_trips(config_service: ConfigService):
     assert await config_service.get_video_poll_timeout_seconds() == 3600
 

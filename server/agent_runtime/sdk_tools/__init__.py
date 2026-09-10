@@ -62,6 +62,7 @@ from server.agent_runtime.sdk_tools.text_generation import (
     patch_draft_tool,
     promote_draft_tool,
 )
+from server.agent_runtime.sdk_tools.visual_qa import run_visual_qa_tool
 from server.agent_runtime.sdk_tools.workflow_plan import get_workflow_plan_tool
 from server.agent_runtime.sdk_tools.workflow_status import complete_script_plan_rebuild_tool
 from server.media_tools.context import (
@@ -88,6 +89,7 @@ ARCREEL_MCP_TOOL_IDS: tuple[str, ...] = (
     "complete_script_plan_rebuild",
     "get_workflow_plan",
     "get_prompt_preview",
+    "run_visual_qa",
     "get_generation_batch",
     "cancel_generation_batch",
     "get_project_content",
@@ -201,6 +203,7 @@ def build_arcreel_mcp_server(*, project_name: str, projects_root: Path, user_id:
         complete_script_plan_rebuild_tool(ctx),
         get_workflow_plan_tool(ctx),
         get_prompt_preview_tool(ctx),
+        run_visual_qa_tool(ctx),
         get_generation_batch_tool(ctx),
         cancel_generation_batch_tool(ctx),
         get_project_content_tool(ctx),

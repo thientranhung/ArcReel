@@ -136,6 +136,7 @@ from lib.source_loader import (
     UnsupportedFormatError,
 )
 from lib.source_revision import SourceScope
+from lib.visual_qa import ProjectTextBackendVisualQa, VisualQaResult
 from lib.workflow_plan import WorkflowPlan, WorkflowPlanRequest
 from lib.workflow_state import WorkflowRequestError
 from server.draft_workflow import (
@@ -151,6 +152,13 @@ from server.routers._validators import validate_backend_value
 from server.services.prompt_preview import ItemPromptPreview, ScriptItemNotFound, preview_item_prompts
 from server.services.script_plan_conversion import convert_script_plan as run_script_plan_conversion
 from server.services.video_caps import annotate_reference_unit_tiers
+from server.services.visual_qa_service import (
+    VisualQaImageMissing,
+    VisualQaResourceNotFound,
+)
+from server.services.visual_qa_service import (
+    run_visual_qa as run_visual_qa_service,
+)
 from server.services.workflow_planner import WorkflowPlanner
 from server.text_generation import (
     CompensableTextGenerationResult,
@@ -1616,6 +1624,80 @@ _BACKEND_SETTINGS = ("video_backend", "image_provider_t2i", "image_provider_i2i"
 
 class ToolMessage(BaseModel):
     message: str
+
+
+class RunVisualQaRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    resource_type: Literal["character", "scene", "prop", "storyboard", "grid"]
+    ids: list[str] = Field(min_length=1, description="待评审的资源 id 列表")
+    script: str | None = Field(
+        default=None, description="剧本文件名（纯文件名）；resource_type 为 storyboard/grid 时必填"
+    )
+
+    @field_validator("script")
+    @classmethod
+    def _validate_script(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not value or "/" in value or "\\" in value or value in {".", ".."}:
+            raise ValueError(f"script 必须是纯文件名，禁止路径分隔符: {value!r}")
+        return value
+
+    @model_validator(mode="after")
+    def _script_required_for_scripted_kinds(self) -> RunVisualQaRequest:
+        if self.resource_type in ("storyboard", "grid") and self.script is None:
+            raise ValueError(f"resource_type={self.resource_type} 时 script 必填")
+        return self
+
+
+class RunVisualQaResult(ToolMessage):
+    results: dict[str, VisualQaResult]
+    warnings_added: dict[str, dict[str, Any]]
+
+
+async def run_visual_qa(
+    request: ToolRequest[RunVisualQaRequest],
+    scope: ProjectScope,
+    _caller: CallerContext,
+    services: Services,
+) -> ToolOutcome[RunVisualQaResult]:
+    """对一批资源的当前图各跑一次视觉质检评审，写 sidecar 并返回评分与新增 warning。
+
+    只读：评审的是已经生成好的图，不生成新图、不入生成队列、不改产物清单。评审后端解析口径
+    与 ``STYLE_ANALYSIS`` 一致，按项目配置的 ``TextTaskType.VISUAL_QA`` 档位解析文本 backend
+    （见 ``lib.visual_qa.ProjectTextBackendVisualQa``）。
+    """
+    value = request.value
+    try:
+        failure = await asyncio.to_thread(project_migration_failure, scope.project_name, services.projects)
+        if failure is not None:
+            return ToolOutcome(problem=ToolProblem(MIGRATION_FAILURE_CODE, failure.reason))
+        outcome = await run_visual_qa_service(
+            scope.project_name,
+            value.resource_type,
+            value.ids,
+            backend=ProjectTextBackendVisualQa(scope.project_name),
+            script_file=value.script,
+            projects=services.projects,
+        )
+    except VisualQaResourceNotFound as exc:
+        return ToolOutcome(problem=ToolProblem("item_not_found", str(exc)))
+    except VisualQaImageMissing as exc:
+        return ToolOutcome(problem=ToolProblem("image_missing", str(exc)))
+    except FileNotFoundError as exc:
+        return ToolOutcome(problem=ToolProblem("file_not_found", str(exc)))
+    except (TypeError, ValueError) as exc:
+        return ToolOutcome(problem=ToolProblem("invalid_request", str(exc)))
+    except Exception as exc:
+        return ToolOutcome(problem=ToolProblem("internal_error", f"run_visual_qa 失败: {exc}"))
+    return ToolOutcome(
+        value=RunVisualQaResult(
+            message=f"已完成 {len(outcome.results)} 项视觉质检",
+            results=outcome.results,
+            warnings_added=outcome.warnings_added,
+        )
+    )
 
 
 class PlanEpisodesRequest(BaseModel):

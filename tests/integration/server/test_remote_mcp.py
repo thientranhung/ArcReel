@@ -343,6 +343,7 @@ async def test_remote_mcp_returns_typed_workflow_plan_and_rejects_bad_project(
     readers = {
         "get_project_content",
         "get_prompt_preview",
+        "run_visual_qa",
         "list_source_files",
         "get_source_text",
         "get_episode_script",
