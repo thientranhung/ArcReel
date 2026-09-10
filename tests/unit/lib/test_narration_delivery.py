@@ -741,8 +741,8 @@ def test_resolve_scene_audio_mode_truth_table(
 ) -> None:
     assert (
         resolve_scene_audio_mode(
-            scene_mode,  # type: ignore[arg-type]
-            project_default,  # type: ignore[arg-type]
+            scene_mode,
+            project_default,
             has_clip_audio=has_clip_audio,
             has_tts=has_tts,
         )
@@ -760,8 +760,8 @@ def test_resolve_scene_audio_mode_never_silent_when_tts_mode_falls_back_to_avail
                 continue
             for has_tts in (True, False):
                 resolved = resolve_scene_audio_mode(
-                    scene_mode,  # type: ignore[arg-type]
-                    project_default,  # type: ignore[arg-type]
+                    scene_mode,
+                    project_default,
                     has_clip_audio=True,
                     has_tts=has_tts,
                 )
@@ -779,7 +779,7 @@ def test_resolve_scene_audio_mode_is_silent_only_when_no_source_is_selected() ->
 def test_resolve_scene_audio_mode_rejects_unsupported_literal() -> None:
     with pytest.raises(AssertionError):
         resolve_scene_audio_mode(
-            "bogus",  # type: ignore[arg-type]
+            "bogus",
             "model",
             has_clip_audio=True,
             has_tts=True,
@@ -787,7 +787,7 @@ def test_resolve_scene_audio_mode_rejects_unsupported_literal() -> None:
     with pytest.raises(AssertionError):
         resolve_scene_audio_mode(
             None,
-            "bogus",  # type: ignore[arg-type]
+            "bogus",
             has_clip_audio=True,
             has_tts=True,
         )
