@@ -9,7 +9,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lib.ark_shared import ARK_BASE_URL, ark_base_url, create_ark_client, resolve_ark_api_key
+from lib.ark_shared import (
+    ARK_BASE_URL,
+    ark_api_model_name,
+    ark_base_url,
+    create_ark_client,
+    is_byteplus_base_url,
+    resolve_ark_api_key,
+)
 
 
 class TestBaseUrlNormalization:
@@ -76,3 +83,40 @@ class TestCreateArkClient:
         with _recorded_ark_sdk() as created:
             create_ark_client(api_key="k")
         assert created == [{"base_url": ARK_BASE_URL, "api_key": "k"}]
+
+
+class TestBytePlusModelNames:
+    """BytePlus（国际版）与国内站共用 Ark 协议但 Seedance 定名不同：registry 键只在发往 BytePlus 时换名。"""
+
+    BYTEPLUS = "https://ark.ap-southeast.bytepluses.com/api/v3"
+
+    def test_detects_byteplus_host(self):
+        assert is_byteplus_base_url(self.BYTEPLUS)
+        assert is_byteplus_base_url("https://ark.ap-southeast.bytepluses.com/api/v3/")
+        assert not is_byteplus_base_url(None)
+        assert not is_byteplus_base_url("https://ark.cn-beijing.volces.com/api/v3")
+        # 仅按 host 判定，路径里出现该串不算
+        assert not is_byteplus_base_url("https://example.com/bytepluses.com/api/v3")
+
+    @pytest.mark.parametrize(
+        ("registry_model", "byteplus_model"),
+        [
+            ("doubao-seedance-2-5-260628", "dreamina-seedance-2-5-260628"),
+            ("doubao-seedance-2-0-260128", "dreamina-seedance-2-0-260128"),
+            ("doubao-seedance-2-0-mini-260615", "dreamina-seedance-2-0-mini-260615"),
+            ("doubao-seedance-2-0-fast-260128", "dreamina-seedance-2-0-fast-260128"),
+            ("doubao-seedance-2.0", "dreamina-seedance-2.0"),
+            ("doubao-seedance-1-5-pro-251215", "seedance-1-5-pro-251215"),
+            ("doubao-seedance-1.5-pro", "seedance-1.5-pro"),
+        ],
+    )
+    def test_seedance_renamed_for_byteplus(self, registry_model: str, byteplus_model: str):
+        assert ark_api_model_name(registry_model, self.BYTEPLUS) == byteplus_model
+
+    def test_domestic_site_keeps_registry_name(self):
+        assert ark_api_model_name("doubao-seedance-2-5-260628", None) == "doubao-seedance-2-5-260628"
+        assert ark_api_model_name("doubao-seedance-2-5-260628", ARK_BASE_URL) == "doubao-seedance-2-5-260628"
+
+    def test_unmapped_model_passes_through_on_byteplus(self):
+        # 未核实的映射不臆造：Seedream / 文本模型原样发出，让上游报真名
+        assert ark_api_model_name("doubao-seedream-4-5-251128", self.BYTEPLUS) == "doubao-seedream-4-5-251128"
