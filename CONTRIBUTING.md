@@ -23,7 +23,9 @@ uv run alembic upgrade head
 # 启动后端 (终端 1)
 # 注意：必须用 --reload-dir 限定监视目录，否则 watchfiles 会扫描
 # node_modules / .venv / .git / .worktrees 等数十万个文件，单核 CPU 占用超过 50%
-uv run uvicorn server.app:app --reload --reload-dir server --reload-dir lib --port 1241
+# --timeout-graceful-shutdown：--reload 重启时若浏览器 / MCP 客户端仍挂着长连接（SSE、轮询），
+# 旧 worker 会一直停在 "Waiting for connections to close"，不给上限就得手动 SIGKILL
+uv run uvicorn server.app:app --reload --reload-dir server --reload-dir lib --port 1241 --timeout-graceful-shutdown 5
 
 # 启动前端 (终端 2)
 cd frontend && pnpm dev

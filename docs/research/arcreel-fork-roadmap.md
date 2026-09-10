@@ -141,10 +141,16 @@ Hai tập (2 phút 22 giây) hết 20,81 USD video thực trả trên BytePlus, 
 
 Thay thế §3 và gộp §5.2, §5.3, §5.5. Duyệt làm đến đợt 3; đợt 4 để sau. Mỗi đợt kết thúc bằng đo lại trên Bible story bằng Codex QA. Không làm: viết lại bằng Go, node canvas, Temporal, lineage graph đầy đủ.
 
+Bố trí nhánh trên fork: `main` chỉ mirror upstream (workflow sync fast-forward hằng ngày); `dev` là nhánh tích hợp và default branch, mọi PR nhắm vào `dev`; `dev` merge `main` định kỳ để nhận thay đổi upstream. Các workflow chỉ dành cho maintainer upstream (release-please, project-status-sync, docker, nightly) đã tắt trên fork.
+
 ### Đợt 0: dọn nợ
 1. Merge PR #1 (Gemini schema), #3 (BytePlus model id), #4 (sync upstream) vào fork.
 2. PR #2: sửa Codex P1 (screenplay và reference_video chỉ nối tập bằng hình, không thêm lời dẫn), full gate, chuyển ready.
 3. Sửa deadlock flock khi TTS commit song song; sửa lệch tier duration giữa admission và worker; thêm `--timeout-graceful-shutdown` vào CONTRIBUTING.
+
+Phát sinh từ đợt 0 (chưa làm, xếp vào đợt 2 mục 11):
+- Còn nhiều chỗ gọi `load_project` / `load_script` đồng bộ ngay trong `async def` trên event loop (`lib/config/resolver.py`, `server/media_tools/*`, `server/routers/*`, `project_manager.generate_overview`). Không gây deadlock kiểu PR #7 nhưng chặn loop khi tiến trình khác giữ khóa. Cần audit và đưa ra thread pool.
+- Vụ 8 vs 6 trên Seedance ngày 2026-09-09 nhiều khả năng do hai resolver sàn thời lượng TTS (`CurrentTtsSettingsResolver` ở admission vs `ResolvedTtsSettingsResolver.from_audio_lane` ở worker) chứ không phải do thu hẹp theo resolution (PR #8 chỉ sửa phần resolution). Cần hợp nhất hai resolver.
 
 ### Đợt 1: chất lượng prompt
 4. `feat/prompt-rules-asset`: neo da/tóc/mắt, giày bắt buộc, cấm biểu cảm và tính từ trừu tượng; scene ≥3 điểm neo và chỗ trống blocking; prop chỉ mô tả tĩnh; board tham chiếu 4:3 cận mặt + toàn thân nền trắng.
