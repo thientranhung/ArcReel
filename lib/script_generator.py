@@ -64,6 +64,7 @@ from lib.episode_paths import (
     episode_script_filename,
 )
 from lib.formal_write import FormalWriteReceipt
+from lib.project_audience import resolve_project_audience_text
 from lib.project_manager import ProjectManager, ScriptWriteConflict
 from lib.prompt_builders_ad import build_ad_prompt, build_ad_reference_prompt
 from lib.prompt_builders_reference import build_reference_video_prompt
@@ -1035,6 +1036,7 @@ class ScriptGenerator:
             characters=characters,
             scenes=scenes,
             props=props,
+            audience=resolve_project_audience_text(self.project_json),
         )
 
     def _parse_drama_visual(self, response_text: str) -> list[dict]:

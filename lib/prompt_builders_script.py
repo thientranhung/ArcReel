@@ -10,6 +10,7 @@
 """
 
 from lib.prompt_rules.asset_appearance import asset_reference_names, iter_asset_appearances
+from lib.prompt_rules.audience_gear import render_audience_section
 from lib.prompt_rules.episode_pacing import render_pacing_section
 from lib.prompt_rules.episode_target_duration import render_episode_target_duration_rule
 from lib.speech_rate import speech_rate_units_per_second
@@ -468,6 +469,7 @@ def build_drama_prompt(
     characters: dict | None = None,
     scenes: dict | None = None,
     props: dict | None = None,
+    audience: str | None = None,
 ) -> str:
     """构建剧情演绎 prompt_authoring（视觉层）prompt。
 
@@ -479,8 +481,15 @@ def build_drama_prompt(
 
     ``characters`` / ``scenes`` / ``props`` 注入出场资产的外观描述（project.json 各 bucket），
     供视觉字段写服装 / 材质 / 陈设细节时取材；三者都为 None 时不渲染资产块。
+
+    ``audience`` 是解析好的受众文本（见 ``lib.project_audience.resolve_project_audience_text``），
+    经 ``render_audience_section`` 判定是否命中儿童 gear；非儿童受众 / 未设时该函数回空串，
+    prompt 不变。
     """
     pacing_block = render_pacing_section("drama") + "\n\n"
+    audience_block = render_audience_section(audience)
+    if audience_block:
+        audience_block += "\n\n"
     assets_block = ""
     if characters is not None or scenes is not None or props is not None:
         assets_block = f"""<characters>
@@ -508,7 +517,7 @@ def build_drama_prompt(
 **结构约束**：字段 / 枚举 / 必填项由 response_schema 强制；本提示只解释**如何写好每个字段的内容**。
 **对齐约束**：每个分镜产出一条视觉层，`scene_id` 必须与下方内容逐字一致、不增不减不改；不要输出口播 / 时长 / 资产等非视觉字段。
 
-{pacing_block}# 上下文
+{pacing_block}{audience_block}# 上下文
 
 <overview>
 {project_overview.get("synopsis", "")}
@@ -575,6 +584,7 @@ def build_normalize_prompt(
     episode_outline: dict | None = None,
     next_episode_outline: dict | None = None,
     previous_episode_outline: dict | None = None,
+    audience: str | None = None,
 ) -> str:
     """脚本规划的规范化 prompt：源文 → 结构化分镜内容（utterances + source_text + 视觉改编描述）。
 
@@ -595,6 +605,11 @@ def build_normalize_prompt(
     ``episode_target_duration`` 是项目级「单集目标时长」偏好（秒，由调用方经
     ``project_episode_target_duration`` 解析），驱动模型决定本集拆多少个场景；``None`` 即未设目标、
     不注入该段。它与 ``default_duration`` 是两个尺度（整集体量 vs 单场默认秒数），同为软偏好。
+
+    ``audience`` 是解析好的受众文本（由调用方经 ``lib.project_audience.resolve_project_audience_text``
+    解析：项目显式 ``audience`` 字段优先，否则退回 overview 的 world_setting / theme 文本），经
+    ``render_audience_section`` 判定是否命中儿童（约 6-10 岁）gear；非儿童受众 / 未设时回空串，
+    prompt 与不带该参数时逐字相同。
     """
     char_list = _format_names(characters, "character")
     scene_list = _format_names(scenes, "scene")
@@ -676,13 +691,16 @@ def build_normalize_prompt(
     if episode_target_rule:
         duration_rule = f"{duration_rule}。{episode_target_rule}"
     pacing_block = render_pacing_section("drama") + "\n\n"
+    audience_block = render_audience_section(audience)
+    if audience_block:
+        audience_block += "\n\n"
 
     return f"""{task_line}
 
 **输出语言**：{language_rule}
 **结构约束**：字段 / 枚举 / 必填项由 response_schema 强制；本提示只解释**如何写好每个字段的内容**。
 
-{pacing_block}## 项目信息
+{pacing_block}{audience_block}## 项目信息
 
 <overview>
 {project_overview.get("synopsis", "")}
