@@ -105,6 +105,9 @@ FAILURE_CODE_KEYS: dict[str, str] = {
     # 上游确定性 4xx 拒绝。params 里的 provider_reason 是脱敏截断后的上游原文，刻意不进
     # 译文模板：它不该被翻译，读侧按独立字段原样展示。
     "provider_rejected": "task_fail_provider_rejected",
+    # 轮询判定的供应商侧生成终态失败（如审核类拒绝）。params 里的 provider_message 是上游
+    # 原文，同样刻意不进译文模板；provider_code 是结构化机器码，缺席时不落这个键。
+    "provider_generation_failed": "task_fail_provider_generation_failed",
     "dispatch_provider_requeue_failed": "task_fail_dispatch_provider_requeue_failed",
     "restart_lost_image": "task_fail_restart_lost_image",
     "restart_lost_audio": "task_fail_restart_lost_audio",

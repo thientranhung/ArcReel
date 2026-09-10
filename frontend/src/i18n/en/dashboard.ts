@@ -725,6 +725,7 @@ export default {
   'usage_purpose_style_analysis': 'Style analysis',
   'usage_purpose_assistant_session': 'Assistant session',
   'usage_purpose_endpoint_trial': 'Endpoint trial',
+  'usage_purpose_visual_qa': 'Visual QA',
   'usage_project_untitled': 'Untitled',
   'usage_media_image': 'Image',
   'usage_media_video': 'Video',
@@ -1642,6 +1643,7 @@ export default {
   'tool_name_complete_script_plan_rebuild': 'Complete script plan rebuild',
   'tool_name_get_workflow_plan': 'Get complete workflow plan',
   'tool_name_get_prompt_preview': 'Preview final prompts',
+  'tool_name_run_visual_qa': 'Visual QA',
   'tool_name_get_generation_batch': 'Get generation batch',
   'tool_name_cancel_generation_batch': 'Cancel generation batch',
   'tool_name_get_project_content': 'Read project content',
@@ -1936,6 +1938,10 @@ export default {
   'narration_delivery_label': 'Narration delivery',
   'narration_delivery_post_production': 'Add in post-production',
   'narration_delivery_use_tts': 'Use current TTS',
+  'audio_mode_label': 'Audio source',
+  'audio_mode_default': 'Default (use episode setting)',
+  'audio_mode_model': 'Model voice',
+  'audio_mode_tts': 'Narration voiceover',
 
   // 自定义调用端点
   'ce_section_title': 'Endpoints',

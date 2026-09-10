@@ -11,6 +11,7 @@ from lib.prompt_rules.episode_target_duration import (
     EPISODE_TARGET_DURATION_RULE_TEMPLATE,
     render_episode_target_duration_rule,
 )
+from lib.prompt_rules.shot_continuity import render_shot_continuity_rules
 from lib.reference_video.writing_syntax import scene_reference_rules, writing_syntax_spec
 
 
@@ -77,6 +78,11 @@ def test_build_reference_video_prompt_contains_required_sections():
     assert "（时长 8s）" in prompt
     # 断言完整约束句：单看 "9" 会被默认 aspect_ratio "9:16" 满足，max_refs 未注入也能通过
     assert "不超过 9 个（模型上限）" in prompt
+
+
+def test_build_reference_video_prompt_injects_shot_continuity_rules():
+    text = _prompt_authoring_prompt()
+    assert "".join(render_shot_continuity_rules().split()) in "".join(text.split())
 
 
 def test_build_reference_video_prompt_emphasizes_no_appearance_description():

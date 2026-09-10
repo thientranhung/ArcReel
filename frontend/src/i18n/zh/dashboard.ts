@@ -724,6 +724,7 @@ export default {
   'usage_purpose_style_analysis': '风格分析',
   'usage_purpose_assistant_session': '助手会话',
   'usage_purpose_endpoint_trial': '端点试跑',
+  'usage_purpose_visual_qa': '视觉质检',
   'usage_project_untitled': '未命名',
   'usage_media_image': '图片',
   'usage_media_video': '视频',
@@ -1641,6 +1642,7 @@ export default {
   'tool_name_complete_script_plan_rebuild': '完成脚本规划重建',
   'tool_name_get_workflow_plan': '查询完整工作流计划',
   'tool_name_get_prompt_preview': '预览最终提示词',
+  'tool_name_run_visual_qa': '视觉质检',
   'tool_name_get_generation_batch': '查询生成批次',
   'tool_name_cancel_generation_batch': '取消生成批次',
   'tool_name_get_project_content': '读取项目内容',
@@ -1935,6 +1937,10 @@ export default {
   'narration_delivery_label': '旁白交付',
   'narration_delivery_post_production': '后期配音',
   'narration_delivery_use_tts': '使用当前 TTS',
+  'audio_mode_label': '声音归属',
+  'audio_mode_default': '默认（沿用整集设置）',
+  'audio_mode_model': '模型原声',
+  'audio_mode_tts': '旁白配音',
 
   // 自定义调用端点
   'ce_section_title': '调用端点',

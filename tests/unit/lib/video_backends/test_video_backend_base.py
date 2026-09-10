@@ -29,6 +29,7 @@ from lib.video_backends.base import (
     normalize_provider_status,
     persist_provider_job_id,
     poll_with_retry,
+    provider_code_from_response,
     provider_reason_summary,
     recording_poll,
     should_retry_download,
@@ -780,6 +781,7 @@ class TestSubmitPost:
             await submit_post(_post, provider="v2")
 
         assert excinfo.value.provider_reason == "InvalidParameter: prompt violates the content policy"
+        assert excinfo.value.provider_code == "InvalidParameter"
         assert "SECRETKEY" not in str(excinfo.value)
         assert should_retry_submit(excinfo.value) is False
 
@@ -828,6 +830,7 @@ class TestSubmitPost:
             await submit_post(_post, provider="v2")
 
         assert excinfo.value.provider_reason is None
+        assert excinfo.value.provider_code is None
         assert excinfo.value.response.status_code == status
 
     async def test_failure_body_is_redacted_before_it_reaches_the_log(self, caplog):
@@ -964,6 +967,57 @@ class TestProviderReasonSummary:
         )
         assert summary is not None
         assert "vda_live_SECRET" not in summary
+
+
+class TestProviderCodeFromResponse:
+    """provider_code_from_response：4xx 响应体 → 与拒因同层的结构化机器码。"""
+
+    @staticmethod
+    def _response(status: int, **kwargs: object) -> httpx.Response:
+        return httpx.Response(status, request=httpx.Request("POST", "https://x/v2"), **kwargs)
+
+    def test_reads_top_level_code(self):
+        assert provider_code_from_response(self._response(400, json={"code": "InvalidParameter"})) == (
+            "InvalidParameter"
+        )
+
+    def test_digs_into_the_nested_error_object(self):
+        # OpenAI 兼容协议把机器码裹在 error 容器下（body["error"]["code"]）。
+        assert (
+            provider_code_from_response(
+                self._response(400, json={"error": {"code": "content_policy_violation", "message": "blocked"}})
+            )
+            == "content_policy_violation"
+        )
+
+    def test_ark_style_top_level_code(self):
+        assert (
+            provider_code_from_response(
+                self._response(400, json={"code": "InputTextSensitiveContentDetected", "message": "blocked"})
+            )
+            == "InputTextSensitiveContentDetected"
+        )
+
+    def test_returns_none_for_server_errors(self):
+        assert provider_code_from_response(self._response(500, json={"code": "boom"})) is None
+
+    @pytest.mark.parametrize("status", [401, 407])
+    def test_returns_none_for_credential_errors(self, status: int):
+        assert provider_code_from_response(self._response(status, json={"code": "AuthFailed"})) is None
+
+    def test_returns_none_when_body_has_no_recognizable_code(self):
+        assert provider_code_from_response(self._response(400, json={"message": "bad prompt"})) is None
+
+    def test_returns_none_for_non_json_body(self):
+        assert provider_code_from_response(self._response(400, text="plain text error")) is None
+
+    def test_returns_none_for_unread_streaming_response(self):
+        response = httpx.Response(
+            400,
+            request=httpx.Request("POST", "https://x/v2"),
+            stream=httpx.SyncByteStream(),
+        )
+        assert provider_code_from_response(response) is None
 
 
 def _make_operational_error(msg: str) -> OperationalError:

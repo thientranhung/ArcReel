@@ -622,6 +622,69 @@ class TestOpenAIVideoBackend:
             assert not isinstance(ei.value, ResumeExpiredError), "generate 路径不应抛 ResumeExpiredError"
 
 
+class TestCreateVideoSubmitRetryBehavior:
+    """`_create_video`（非幂等「创建 + 计费」调用）的重试判据测试。"""
+
+    async def test_create_post_send_timeout_does_not_retry(self, tmp_path: Path):
+        """create 阶段的 APITimeoutError（发出后超时，可能已送达并计费）应终态失败，不自动重试。"""
+        import httpx
+        from openai import APITimeoutError
+
+        from lib.video_backends.base import AmbiguousSubmitError
+
+        error = APITimeoutError(request=httpx.Request("POST", "https://api.openai.com/v1/videos"))
+        mock_client = AsyncMock()
+        mock_client.videos.create = AsyncMock(side_effect=error)
+
+        with captured_openai_clients(mock_client), bounded_poll_clock():
+            from lib.video_backends.openai import OpenAIVideoBackend
+
+            backend = OpenAIVideoBackend(api_key="test-key")
+            request = VideoGenerationRequest(prompt="test", output_path=tmp_path / "out.mp4", duration_seconds=8)
+            with pytest.raises(AmbiguousSubmitError):
+                await backend.generate(request)
+
+        assert mock_client.videos.create.call_count == 1
+
+    async def test_create_retries_on_retryable_status_error(self, tmp_path: Path):
+        """create 阶段服务端已明确响应的 5xx（InternalServerError）应重试。"""
+        error = InternalServerError(
+            message="internal error",
+            response=MagicMock(status_code=500, headers={}),
+            body=None,
+        )
+        mock_client = AsyncMock()
+        mock_client.videos.create = AsyncMock(side_effect=[error, _make_mock_video(status="queued")])
+        mock_client.videos.retrieve = AsyncMock(return_value=_make_mock_video(status="completed", seconds="8"))
+        mock_client.videos.download_content = AsyncMock(return_value=_make_mock_content(b"video-data"))
+
+        with captured_openai_clients(mock_client), bounded_poll_clock():
+            from lib.video_backends.openai import OpenAIVideoBackend
+
+            backend = OpenAIVideoBackend(api_key="test-key")
+            output_path = tmp_path / "out.mp4"
+            request = VideoGenerationRequest(prompt="test", output_path=output_path, duration_seconds=8)
+            result = await backend.generate(request)
+
+        assert result.video_path == output_path
+        assert mock_client.videos.create.call_count == 2
+
+    async def test_create_success_path_unchanged(self, tmp_path: Path):
+        """成功路径（无重试）行为不变。"""
+        _stub_client_completed(mock_client := AsyncMock(), video_id="vid_success")
+
+        with captured_openai_clients(mock_client), bounded_poll_clock():
+            from lib.video_backends.openai import OpenAIVideoBackend
+
+            backend = OpenAIVideoBackend(api_key="test-key")
+            output_path = tmp_path / "out.mp4"
+            request = VideoGenerationRequest(prompt="test", output_path=output_path, duration_seconds=8)
+            result = await backend.generate(request)
+
+        assert result.video_path == output_path
+        assert mock_client.videos.create.call_count == 1
+
+
 class TestProxyStatusSynonyms:
     """OpenAI 兼容代理网关（NewAPI 系）转发非 Sora 型号时会透传底层厂商状态串。
 

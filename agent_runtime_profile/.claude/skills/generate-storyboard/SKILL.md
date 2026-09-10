@@ -42,6 +42,15 @@ description: 为分镜生成分镜图。当用户说"生成分镜"、"预览分�
 - 编辑不会更新 `image_prompt`——编辑后再触发 `generate_storyboards` 仍按原 `image_prompt`
   重画，编辑效果只能从版本历史找回
 
+## 视觉质检（可选）
+
+生成完成后，可用
+`mcp__arcreel__run_visual_qa({"resource_type": "storyboard", "script": "episode_1.json", "ids": ["E1S05"]})`
+对刚出的分镜图做一次视觉复核（宫格合图用 `"resource_type": "grid"`）。只读：不生成新图、
+不入生成队列，返回每个 id 的四维评分（content / asset / style / audience）与 `verdict`
+（pass / regenerate）。`verdict` 为 `regenerate` 时，其 `notes` 字段写的是具体修改建议，
+可以直接原样作为 `edit_images` 的 `instruction` 使用。
+
 ## 角色一致性机制
 
 MCP 工具自动处理以下参考图传入，无需手动指定：
@@ -72,7 +81,7 @@ Composition:
   shot_type: [image_prompt.composition.shot_type]
   lighting: [image_prompt.composition.lighting]
   ambiance: [image_prompt.composition.ambiance]
-Avoid: 水印、多余文字、Logo
+Avoid: 水印、多余文字、Logo、字幕、标题、拼贴、分屏、多余人物、人物直视镜头（除非剧本明确打破第四面墙）
 ```
 
 > 画面比例通过 API 参数设置，不写入 prompt。

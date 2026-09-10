@@ -596,6 +596,65 @@ def test_script_plan_basis_tracks_the_previous_episode_outline(generation_mode: 
     assert changed.digest != baseline.digest
 
 
+def _drama_script(*, last_scene_id: str = "E1S02", action: str = "张三举起火把") -> dict[str, object]:
+    return {
+        "content_mode": "drama",
+        "scenes": [
+            {"scene_id": "E1S01", "scenes": ["村口"], "characters_in_scene": ["张三"]},
+            {
+                "scene_id": last_scene_id,
+                "scenes": ["山洞"],
+                "characters_in_scene": ["张三"],
+                "video_prompt": {"action": action, "camera_motion": "Static", "ambiance_audio": "风声"},
+            },
+        ],
+    }
+
+
+def test_script_plan_basis_ignores_an_absent_previous_episode_exit_state() -> None:
+    """无 loader、或 loader 返回 None（上集剧本未提交）时退出态不进 basis——digest 与不带该参数时相同。"""
+    axes = {"content_mode": "drama", "generation_mode": "storyboard", "episodes": [{"episode": 2}]}
+
+    no_loader = build_script_plan_basis("source", episode=2, project=axes)
+    loader_returns_none = build_script_plan_basis(
+        "source", episode=2, project=axes, previous_script_loader=lambda _ep: None
+    )
+
+    assert loader_returns_none.digest == no_loader.digest
+
+
+def test_script_plan_basis_tracks_the_previous_episode_exit_state() -> None:
+    """上集末场退出态存在时进 basis：改动上集剧本末场即让本集 script_plan digest 变化（判 stale）。"""
+    axes = {"content_mode": "drama", "generation_mode": "storyboard", "episodes": [{"episode": 2}]}
+
+    without_exit_state = build_script_plan_basis("source", episode=2, project=axes)
+    with_exit_state = build_script_plan_basis(
+        "source", episode=2, project=axes, previous_script_loader=lambda _ep: _drama_script()
+    )
+    changed_last_scene = build_script_plan_basis(
+        "source",
+        episode=2,
+        project=axes,
+        previous_script_loader=lambda _ep: _drama_script(action="张三转身离去"),
+    )
+
+    assert with_exit_state.digest != without_exit_state.digest
+    assert changed_last_scene.digest != with_exit_state.digest
+
+
+def test_script_plan_basis_ignores_previous_episode_exit_state_for_first_episode() -> None:
+    """首集没有上集，即便传入 loader 也不该被调用出内容进 basis。"""
+    axes = {"content_mode": "drama", "generation_mode": "storyboard"}
+
+    def _fail(_episode: int) -> dict[str, object]:
+        raise AssertionError("首集不该解析上集剧本")
+
+    no_loader = build_script_plan_basis("source", episode=1, project=axes)
+    with_loader = build_script_plan_basis("source", episode=1, project=axes, previous_script_loader=_fail)
+
+    assert with_loader.digest == no_loader.digest
+
+
 def test_script_plan_basis_tracks_a_set_episode_target_duration() -> None:
     project = {"content_mode": "drama", "generation_mode": "storyboard"}
 

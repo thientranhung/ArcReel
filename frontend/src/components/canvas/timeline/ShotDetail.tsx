@@ -33,6 +33,7 @@ import { EndFrameRow } from "./EndFrameRow";
 import { NarrationAudioCard } from "./NarrationAudioCard";
 import { NarrationDeliveryChoice } from "@/components/shared/NarrationDeliveryChoice";
 import { ReferenceDurationConfirmDialog } from "../reference/ReferenceDurationConfirmDialog";
+import { AudioModeToggle, type SceneAudioMode } from "./AudioModeToggle";
 import { NotesDrawer } from "./NotesDrawer";
 import { PromptPreviewPanel } from "./PromptPreviewPanel";
 import { ReferencesSection } from "./ReferencesSection";
@@ -473,6 +474,8 @@ export function ShotDetail({
   const adShot = isAd ? (segment as AdShot) : null;
   const upstreamVoiceover = adShot?.voiceover_text ?? "";
   const upstreamSection = adShot?.section ?? "";
+  // 声音归属覆盖只在 drama/narration 上声明；ad 分镜无此字段。
+  const audioMode = isAd ? null : ((segment as NarrationSegment | DramaScene).audio_mode ?? null);
   const isDrama = contentMode === "drama";
   const dramaScene = isDrama ? (segment as DramaScene) : null;
   // drama 分镜级发声序列；缺省字段按无发声处理。
@@ -745,6 +748,11 @@ export function ShotDetail({
   const handleNotesCommit = (value: string) => {
     if (value === note) return;
     void onUpdatePrompt?.(segmentId, "note", value);
+  };
+
+  const handleAudioModeChange = (value: SceneAudioMode) => {
+    if (value === audioMode) return;
+    void onUpdatePrompt?.(segmentId, "audio_mode", value);
   };
 
   const handleSave = async () => {
@@ -1358,6 +1366,10 @@ export function ShotDetail({
           >
             <ChevronRight className="h-3.5 w-3.5" />
           </button>
+          {/* 声音归属覆盖只对 drama/narration 分镜有意义（ad 无 audio_mode 字段） */}
+          {refsReadOnly || isAd ? null : (
+            <AudioModeToggle value={audioMode} onChange={handleAudioModeChange} />
+          )}
           {/* 备注抽屉只有落库才有意义：只读展示下不给入口，免得输入的备注静默丢弃 */}
           {refsReadOnly ? null : (
             <NotesDrawer

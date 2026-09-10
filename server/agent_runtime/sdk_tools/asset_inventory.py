@@ -22,7 +22,9 @@ def complete_asset_inventory_tool(ctx: ToolContext):
     @tool(
         "complete_asset_inventory",
         "原子提交分析提取出的资产和资产清单事实。工具会在项目锁内重算 source revision；"
-        "与 expected_source_revision 不一致时整笔拒绝，不修改 project.json。空角色/场景/道具清单是合法结果。",
+        "与 expected_source_revision 不一致时整笔拒绝，不修改 project.json。空角色/场景/道具清单是合法结果。"
+        "各条目的 description 须遵守身份锚定规则（`.claude/references/asset-identity-rules.md`，"
+        "也随 get_workflow_plan().next_action.authoring_rules 下发）。",
         {
             "type": "object",
             "properties": {

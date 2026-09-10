@@ -6,14 +6,21 @@ import asyncio
 import logging
 from pathlib import Path
 
+from openai import APIConnectionError
+
 from lib.aspect_size import VIDEO_TIER_SHORT_EDGE, parse_aspect_ratio, resolution_to_short_edge
 from lib.logging_utils import format_kwargs_for_log
-from lib.openai_shared import OPENAI_RETRYABLE_ERRORS, create_openai_client
+from lib.openai_shared import (
+    OPENAI_RETRYABLE_ERRORS,
+    create_openai_client,
+    should_retry_openai_submit,
+)
 from lib.providers import PROVIDER_OPENAI
 from lib.retry import with_retry_async
 from lib.video_backends.base import (
     IMAGE_MIME_TYPES,
     TERMINAL_PROVIDER_STATUSES,
+    AmbiguousSubmitError,
     ProviderJobIdPersistenceMixin,
     ProviderJobStatus,
     ResumeExpiredError,
@@ -237,10 +244,16 @@ class OpenAIVideoBackend(ProviderJobIdPersistenceMixin):
             task_id=final.id,
         )
 
-    @with_retry_async(retryable_errors=OPENAI_RETRYABLE_ERRORS)
+    @with_retry_async(retry_if=should_retry_openai_submit)
     async def _create_video(self, **kwargs):
-        """仅创建视频任务（带重试）；轮询交由 _poll_until_complete 自管。"""
-        return await self._client.videos.create(**kwargs)
+        """创建视频任务（非幂等「创建 + 计费」调用）；轮询交由 _poll_until_complete 自管。"""
+        try:
+            return await self._client.videos.create(**kwargs)
+        except APIConnectionError as exc:
+            # 含子类 APITimeoutError：SDK 把连接建立失败与发出后超时/中断统一包成本类型，
+            # 不区分请求是否已送达——保守按「可能已送达并计费」处理，转 AmbiguousSubmitError
+            # 终态失败，不自动重试（见 lib.openai_shared.OPENAI_SUBMIT_RETRYABLE_ERRORS 顶部注释）。
+            raise AmbiguousSubmitError(provider=PROVIDER_OPENAI) from exc
 
     async def _poll_until_complete(self, video_id: str, poll_timeout_seconds: int):
         """轮询任务直到状态归一到终态。

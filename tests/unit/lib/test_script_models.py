@@ -576,7 +576,7 @@ class TestLLMSchemaExclusion:
         from lib.script_models import NarrationEpisodeScript
 
         keys = self._all_keys(NarrationEpisodeScript.model_json_schema())
-        for forbidden in ("note", "generated_assets", "end_frame_image"):
+        for forbidden in ("note", "generated_assets", "end_frame_image", "audio_mode"):
             assert forbidden not in keys, f"{forbidden} 不应出现在 LLM schema 中"
         # 顶层 duration_seconds 由 caller 重算
         assert "duration_seconds" not in NarrationEpisodeScript.model_json_schema()["properties"]
@@ -585,7 +585,7 @@ class TestLLMSchemaExclusion:
         from lib.script_models import DramaEpisodeScript
 
         keys = self._all_keys(DramaEpisodeScript.model_json_schema())
-        for forbidden in ("note", "generated_assets", "end_frame_image"):
+        for forbidden in ("note", "generated_assets", "end_frame_image", "audio_mode"):
             assert forbidden not in keys
         assert "duration_seconds" not in DramaEpisodeScript.model_json_schema()["properties"]
         # utterances 是 LLM 可见的一等字段（drama 口播序列的落点），取代旧 voiceover
@@ -628,6 +628,47 @@ class TestLLMSchemaExclusion:
         )
         assert seg.note == "用户标注"
         assert seg.generated_assets.status == "completed"
+
+    def test_narration_segment_audio_mode_defaults_none_and_round_trips(self):
+        base_kwargs = {
+            "segment_id": "E1S1",
+            "duration_seconds": 4,
+            "novel_text": "x",
+            "characters_in_segment": [],
+            "image_prompt": {
+                "scene": "s",
+                "composition": {"shot_type": "Medium Shot", "lighting": "l", "ambiance": "a"},
+            },
+            "video_prompt": {"action": "a", "camera_motion": "Static", "ambiance_audio": "x"},
+        }
+        legacy = NarrationSegment.model_validate(base_kwargs)
+        assert legacy.audio_mode is None
+
+        for mode in ("model", "tts"):
+            seg = NarrationSegment.model_validate({**base_kwargs, "audio_mode": mode})
+            assert seg.audio_mode == mode
+            assert seg.model_dump()["audio_mode"] == mode
+
+        with pytest.raises(ValidationError):
+            NarrationSegment.model_validate({**base_kwargs, "audio_mode": "bogus"})
+
+    def test_drama_scene_audio_mode_defaults_none_and_round_trips(self):
+        base_kwargs = {
+            "scene_id": "E1S01",
+            "characters_in_scene": ["王"],
+            "image_prompt": _image_prompt(),
+            "video_prompt": _drama_video_prompt(),
+        }
+        legacy = DramaScene.model_validate(base_kwargs)
+        assert legacy.audio_mode is None
+
+        for mode in ("model", "tts"):
+            scene = DramaScene.model_validate({**base_kwargs, "audio_mode": mode})
+            assert scene.audio_mode == mode
+            assert scene.model_dump()["audio_mode"] == mode
+
+        with pytest.raises(ValidationError):
+            DramaScene.model_validate({**base_kwargs, "audio_mode": "bogus"})
 
     def test_schema_excludes_scene_type_summary_content_mode_novel_transition(self):
         """LLM 不该看到 scene_type / summary / content_mode / novel / transition_to_next。

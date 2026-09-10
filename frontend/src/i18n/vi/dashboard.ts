@@ -710,6 +710,7 @@ export default {
   'usage_purpose_style_analysis': 'Phân tích phong cách',
   'usage_purpose_assistant_session': 'Phiên trợ lý',
   'usage_purpose_endpoint_trial': 'Chạy thử điểm cuối',
+  'usage_purpose_visual_qa': 'Kiểm định hình ảnh',
   'usage_project_untitled': 'Chưa đặt tên',
   'usage_media_image': 'Hình ảnh',
   'usage_media_video': 'Video',
@@ -1780,6 +1781,7 @@ export default {
   'tool_name_complete_script_plan_rebuild': 'Hoàn tất tái tạo kế hoạch kịch bản',
   'tool_name_get_workflow_plan': 'Xem kế hoạch quy trình đầy đủ',
   'tool_name_get_prompt_preview': 'Xem lời nhắc cuối cùng',
+  'tool_name_run_visual_qa': 'Kiểm định hình ảnh',
   'tool_name_get_generation_batch': 'Xem lô tạo nội dung',
   'tool_name_cancel_generation_batch': 'Hủy lô tạo nội dung',
   'tool_name_get_project_content': 'Đọc nội dung dự án',
@@ -1934,6 +1936,10 @@ export default {
   'narration_delivery_label': 'Cách giao lời dẫn',
   'narration_delivery_post_production': 'Thêm ở hậu kỳ',
   'narration_delivery_use_tts': 'Dùng TTS hiện tại',
+  'audio_mode_label': 'Nguồn âm thanh',
+  'audio_mode_default': 'Mặc định (theo thiết lập cả tập)',
+  'audio_mode_model': 'Giọng gốc của model',
+  'audio_mode_tts': 'Lời dẫn thu bằng TTS',
 
   // 自定义调用端点
   'ce_section_title': 'Điểm gọi',

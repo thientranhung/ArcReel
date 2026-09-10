@@ -9,7 +9,11 @@ user-invocable: false
 调用项目配置的文本生成模型（Gemini / Ark / OpenAI / 自定义供应商，由 project.json 决定），
 基于脚本规划中间文件产出最终的 JSON 剧本。剧本里的 `image_prompt` / `video_prompt`
 是后续图像 / 视频生成的"种子"，**Prompt 质量基本决定了画面质量**——所以本 skill 是
-ArcReel 整条 pipeline 中最值得重点优化的一环。
+ArcReel 整条 pipeline 中最值得重点优化的一环。写 / 审 `image_prompt` / `video_prompt` 前须读
+`.claude/references/shot-continuity-rules.md`（分镜内部状态表、参考图只锁身份、表演纪律、
+运镜、台词与声音口径）——`build_drama_prompt` / `build_narration_prompt` /
+`build_reference_video_prompt` 已把这份规则注入 prompt_authoring 的 LLM 调用，本文件仅用于
+人 / Agent 理解与核对生成结果是否遵守。
 
 ## 前置条件
 

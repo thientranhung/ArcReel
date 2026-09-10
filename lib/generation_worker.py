@@ -63,6 +63,7 @@ from lib.generation_queue import (
     resolve_video_execution_for_queued_task,
 )
 from lib.image_backends.base import ImageCapabilityError
+from lib.moderation_rewrite import classify_provider_rejection
 from lib.narration_delivery import NarratedVideoDurationBlockedError
 from lib.reference_compression import ReferencePayloadFloorError
 from lib.reference_video.execution_checkpoint import (
@@ -74,7 +75,12 @@ from lib.reference_video.execution_checkpoint import (
 from lib.reference_video.request_projection import ReferenceProjectionBlockedError
 from lib.script_editor import ScriptEditError
 from lib.task_failure import encode_failure
-from lib.video_backends.base import ArtifactDownloadError, ProviderRejectedError, VideoCapabilityError
+from lib.video_backends.base import (
+    ArtifactDownloadError,
+    ProviderGenerationFailedError,
+    ProviderRejectedError,
+    VideoCapabilityError,
+)
 
 # Default provider used when a task payload does not specify one.
 DEFAULT_PROVIDER = "gemini-aistudio"
@@ -128,7 +134,23 @@ def _encode_task_failure_message(exc: Exception) -> str:
         params: dict[str, Any] = {"status": exc.response.status_code}
         if exc.provider_reason:
             params["provider_reason"] = exc.provider_reason
+        category = classify_provider_rejection(exc)
+        if category is not None:
+            # 只信结构化 provider_code 分出来的类别（ADR 0052）；分不出来就不落这个参数，
+            # 而不是落一个 unknown——None 与「分类未收录该码」对读侧是同一件事：没有可行动
+            # 的类别信息。
+            params["moderation_category"] = category.value
         return _try_encode_failure("provider_rejected", params) or str(exc)
+    if isinstance(exc, ProviderGenerationFailedError):
+        # 轮询判定的供应商侧生成终态失败（如 Ark 审核类拒绝）：status 与结构化机器码/原文
+        # 各占一个参数，原文不进译文模板，读法与 provider_rejected 对齐。
+        gen_params: dict[str, Any] = {"status": exc.status, "provider_message": exc.provider_message}
+        if exc.provider_code:
+            gen_params["provider_code"] = exc.provider_code
+        category = classify_provider_rejection(exc)
+        if category is not None:
+            gen_params["moderation_category"] = category.value
+        return _try_encode_failure("provider_generation_failed", gen_params) or str(exc)
     if isinstance(
         exc,
         ArtifactDownloadError

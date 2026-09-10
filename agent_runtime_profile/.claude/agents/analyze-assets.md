@@ -43,6 +43,10 @@ description: 从剧本中提取角色 / 场景 / 道具三类资产定义，并�
 
 ### Step 3: 分析提取角色、场景和道具
 
+写任何 description 前先 Read `.claude/references/asset-identity-rules.md`：那是角色 / 场景 / 道具
+description 的身份锚定规则正文（角色肤色/发色/瞳色等必写项与禁止清单、场景的空间锚点要求、道具的
+静态视觉口径），本文件下方只给提取流程，不复述规则细节。
+
 **角色提取规则**：
 
 「识别什么算角色」随 Step 1 读到的 `source_kind` 切换；下方两分支选其一。视觉描述字段口径（description / voice_style）两分支一致。

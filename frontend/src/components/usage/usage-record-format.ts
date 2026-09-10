@@ -55,6 +55,7 @@ const PURPOSE_KEYS: Record<string, string> = {
   style_analysis: "usage_purpose_style_analysis",
   assistant_session: "usage_purpose_assistant_session",
   endpoint_trial: "usage_purpose_endpoint_trial",
+  visual_qa: "usage_purpose_visual_qa",
 };
 
 export function purposeKey(purpose: string | null): string | null {
