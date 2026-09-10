@@ -132,16 +132,53 @@ _OPENING_BRIDGE_GUIDE_VERBATIM = (
 )
 
 
+# 入场态承接要求：上集末场的地点/在场角色/道具/动作/末句台词是事实性快照（由
+# ``lib.episode_ledger.previous_episode_exit_state`` 从上集已提交剧本抽取），驱动本集开场的
+# 画面延续——与 ``_OPENING_BRIDGE_GUIDE_*``（叙事层面的钩子/预告承接）是两个维度，可共存。
+# screenplay 走逐字契约，复用 ``_OPENING_BRIDGE_GUIDE_VERBATIM`` 既有措辞（只改视觉、不新增口播），
+# 不再另写一条，避免同一条「scene_description-only / 不新增口播」的约束重复出现两次。
+_EXIT_STATE_CONTINUITY_GUIDE = (
+    "开场分镜的入场状态（人物位置、着装、手持道具、时间段）须承接自此退出状态，除非本集原文明确有时间或空间跳跃。"
+)
+
+
+def _format_exit_state_lines(exit_state: dict) -> str:
+    """渲染上集末场退出态条目：地点 / 在场角色 / 道具 / 末尾动作 / 末句台词，缺失的行省略。"""
+    lines: list[str] = []
+    location = exit_state.get("location") or []
+    if location:
+        lines.append(f"地点：{'、'.join(location)}")
+    characters_present = exit_state.get("characters_present") or []
+    if characters_present:
+        lines.append(f"在场角色：{'、'.join(characters_present)}")
+    props = exit_state.get("props") or []
+    if props:
+        lines.append(f"道具：{'、'.join(props)}")
+    last_action = exit_state.get("last_action")
+    if last_action:
+        lines.append(f"末尾动作：{last_action}")
+    last_utterance = exit_state.get("last_utterance") or {}
+    text = last_utterance.get("text")
+    if text:
+        speaker = last_utterance.get("speaker")
+        speaker_prefix = f"{speaker}：" if speaker else ""
+        lines.append(f"末句台词：{speaker_prefix}{text}")
+    return "\n".join(lines)
+
+
 def _format_episode_outline_block(
     episode_outline: dict | None,
     next_episode_outline: dict | None,
     previous_episode_outline: dict | None = None,
+    previous_episode_exit_state: dict | None = None,
     *,
     verbatim_dialogue: bool = False,
 ) -> str:
-    """渲染上集 / 本集 / 下集大纲三个上下文块；无规划数据时返回空串（prompt 不渲染该段）。
+    """渲染上集 / 本集 / 下集大纲与上集退出态等上下文块；无规划数据时返回空串（prompt 不渲染该段）。
 
-    ``verbatim_dialogue=True``（screenplay）时开场承接只下发视觉版要求，不允许新增画外音。
+    ``previous_episode_outline`` 与 ``previous_episode_exit_state`` 相互独立：各自只在有值时渲染，
+    互不依赖对方是否存在。``verbatim_dialogue=True``（screenplay）时开场承接只下发视觉版要求，
+    不允许新增画外音；此时「scene_description-only / 不新增口播」的桥接引导只出现一次，供两者共用。
     """
     parts: list[str] = []
     if previous_episode_outline:
@@ -151,7 +188,19 @@ def _format_episode_outline_block(
 上集大纲（仅用于设计本集开场的承接，不要把上集情节重新写进本集）：
 {title_line}{_format_outline_lines(previous_episode_outline)}
 </previous_episode_outline>""")
-        parts.append(_OPENING_BRIDGE_GUIDE_VERBATIM if verbatim_dialogue else _OPENING_BRIDGE_GUIDE_NOVEL)
+    if previous_episode_exit_state:
+        parts.append(f"""<previous_episode_exit_state>
+上一集结尾状态（仅用于设计本集开场的入场态延续，不要重复描述上集情节）：
+{_format_exit_state_lines(previous_episode_exit_state)}
+</previous_episode_exit_state>""")
+    if previous_episode_outline or previous_episode_exit_state:
+        if verbatim_dialogue:
+            parts.append(_OPENING_BRIDGE_GUIDE_VERBATIM)
+        else:
+            if previous_episode_outline:
+                parts.append(_OPENING_BRIDGE_GUIDE_NOVEL)
+            if previous_episode_exit_state:
+                parts.append(_EXIT_STATE_CONTINUITY_GUIDE)
     if episode_outline:
         title = episode_outline.get("title")
         title_line = f"本集标题：{title}\n" if title else ""
@@ -584,6 +633,7 @@ def build_normalize_prompt(
     episode_outline: dict | None = None,
     next_episode_outline: dict | None = None,
     previous_episode_outline: dict | None = None,
+    previous_episode_exit_state: dict | None = None,
     audience: str | None = None,
 ) -> str:
     """脚本规划的规范化 prompt：源文 → 结构化分镜内容（utterances + source_text + 视觉改编描述）。
@@ -596,6 +646,9 @@ def build_normalize_prompt(
     scene_description；默认 ``"novel"`` 维持「改编」语义、画外音由语境判断放开。``episode_outline`` /
     ``next_episode_outline`` 来自分集账本，驱动内容覆盖故事节点、末场落地集尾钩子；
     ``previous_episode_outline``（第二集起）驱动开场承接上集预告 / 钩子：novel 可加画外音，screenplay 只用画面。
+    ``previous_episode_exit_state``（第二集起，由 ``lib.episode_ledger.previous_episode_exit_state`` 从上集
+    已提交剧本抽取）驱动开场的入场态延续（地点 / 在场角色 / 道具 / 末尾动作 / 末句台词），与
+    ``previous_episode_outline`` 相互独立、可单独存在。
 
     ``source_language`` 供时长指引的「台词口播时长」单向下界软指引取语速（阅读单位 / 秒，来自
     ``lib.speech_rate`` 单一真相源，与保存期上界 warning、字幕派生同口径）；缺省 / 未登记回退默认语速。
@@ -626,7 +679,11 @@ def build_normalize_prompt(
     utterances_rule = _NORMALIZE_UTTERANCES_SCREENPLAY if is_screenplay else _NORMALIZE_UTTERANCES_NOVEL
     break_rule = _NORMALIZE_BREAK_RULE_SCREENPLAY if is_screenplay else _NORMALIZE_BREAK_RULE_NOVEL
     outline_block = _format_episode_outline_block(
-        episode_outline, next_episode_outline, previous_episode_outline, verbatim_dialogue=is_screenplay
+        episode_outline,
+        next_episode_outline,
+        previous_episode_outline,
+        previous_episode_exit_state,
+        verbatim_dialogue=is_screenplay,
     )
 
     # 资产引用字段（characters_in_scene / scenes / props，须逐字等于 project.json 登记名）与

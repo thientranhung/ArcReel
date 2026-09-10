@@ -172,6 +172,123 @@ def previous_episode_outline_context(project: Mapping[str, Any], episode: int) -
     return _outline_context(_ledger_entry(project, episode - 1))
 
 
+#: 句末标点：用于从 narration 的 ``novel_text`` 取末句（drama 末句台词/画外音已由 ``utterances`` 结构化，
+#: 无需再切句）。标点保留在前一句末尾；无标点的整段文本按一句处理。
+_SENTENCE_END_RE = re.compile(r"(?<=[。！？!?…])")
+
+
+def _string_list(value: Any) -> list[str]:
+    """非 list 或元素非字符串一律过滤，与 ``_outline_context`` 的脏数据兜底同口径。"""
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
+def _last_drama_utterance(utterances: Any) -> dict[str, Any] | None:
+    """取 ``DramaScene.utterances`` 的最后一条；缺失 / 非法形状 / 空文本按无发声处理。"""
+    if not isinstance(utterances, list) or not utterances:
+        return None
+    last = utterances[-1]
+    if not isinstance(last, Mapping):
+        return None
+    text = last.get("text")
+    if not isinstance(text, str) or not text.strip():
+        return None
+    speaker = last.get("speaker")
+    speaker = speaker if isinstance(speaker, str) and speaker else None
+    return {"speaker": speaker, "text": text}
+
+
+def _last_novel_sentence_utterance(novel_text: Any) -> dict[str, Any] | None:
+    """取 ``NarrationSegment.novel_text`` 的末句，说话人恒为 None（旁白无角色归属）。"""
+    if not isinstance(novel_text, str):
+        return None
+    text = novel_text.strip()
+    if not text:
+        return None
+    sentences = [part.strip() for part in _SENTENCE_END_RE.split(text) if part.strip()]
+    sentence = sentences[-1] if sentences else text
+    return {"speaker": None, "text": sentence}
+
+
+def _video_prompt_action(video_prompt: Any) -> str | None:
+    """取 ``video_prompt.action``（结构化态）或整段文本（``PromptText`` 文本态）；``PendingPrompt``/缺失为 None。"""
+    if isinstance(video_prompt, Mapping):
+        action = video_prompt.get("action")
+        return action.strip() if isinstance(action, str) and action.strip() else None
+    if isinstance(video_prompt, str):
+        return video_prompt.strip() or None
+    return None
+
+
+def _last_scene_or_segment(script: Mapping[str, Any]) -> tuple[Mapping[str, Any] | None, bool]:
+    """从已提交剧本取末场（drama）或末段（narration），返回 ``(条目, 是否 drama)``。
+
+    优先信 ``content_mode`` 声明；存量 / 畸形数据缺该字段时按 ``scenes`` / ``segments`` 哪个是
+    list 兜底猜测——两个顶层字段理论上互斥（各自 content_mode 独有），猜错的唯一后果是
+    退出态抽取落空（后续「全字段皆空」判据兜底为 None），不会抛错。
+    """
+    content_mode = script.get("content_mode")
+    scenes = script.get("scenes")
+    segments = script.get("segments")
+    if content_mode not in ("drama", "narration"):
+        if isinstance(scenes, list):
+            content_mode = "drama"
+        elif isinstance(segments, list):
+            content_mode = "narration"
+        else:
+            return None, False
+    is_drama = content_mode == "drama"
+    candidates = scenes if is_drama else segments
+    if not isinstance(candidates, list):
+        return None, is_drama
+    last = candidates[-1] if candidates else None
+    return (last if isinstance(last, Mapping) else None), is_drama
+
+
+def previous_episode_exit_state(previous_script: dict | None) -> dict[str, Any] | None:
+    """从上一集已提交剧本提取末场退出态，供本集 script_plan 设计开场的入场态延续。
+
+    只读上一集剧本的最后一个分镜（drama ``DramaScene``）/ 分段（narration ``NarrationSegment``），
+    是事实性快照而非创作意图——与账本大纲（``previous_episode_outline_context``）不同，改动上集
+    剧本末场会让本集 script_plan 判 stale，此为设计使然（退出态失真时本集开场的承接前提就变了）。
+
+    best-effort：``previous_script`` 为 None、无 ``scenes``/``segments``、或存量 / 畸形 JSON（字段
+    形状不对、类型错）均不抛错，能抽多少抽多少；全部字段（``scene_id`` / ``location`` /
+    ``characters_present`` / ``props`` / ``last_utterance`` / ``last_action``）皆空时按无退出态
+    处理，返回 None（不让提示词渲染一个空块）。
+    """
+    if not isinstance(previous_script, Mapping):
+        return None
+    last_item, is_drama = _last_scene_or_segment(previous_script)
+    if last_item is None:
+        return None
+
+    raw_scene_id = last_item.get("scene_id" if is_drama else "segment_id")
+    scene_id = raw_scene_id if isinstance(raw_scene_id, str) else ""
+    location = _string_list(last_item.get("scenes"))
+    characters_present = _string_list(last_item.get("characters_in_scene" if is_drama else "characters_in_segment"))
+    props = _string_list(last_item.get("props"))
+    last_utterance = (
+        _last_drama_utterance(last_item.get("utterances"))
+        if is_drama
+        else _last_novel_sentence_utterance(last_item.get("novel_text"))
+    )
+    last_action = _video_prompt_action(last_item.get("video_prompt"))
+
+    if not (scene_id or location or characters_present or props or last_utterance is not None or last_action):
+        return None
+
+    return {
+        "scene_id": scene_id,
+        "location": location,
+        "characters_present": characters_present,
+        "props": props,
+        "last_utterance": last_utterance,
+        "last_action": last_action,
+    }
+
+
 def normalize_source_text(text: str) -> str:
     """账本坐标系的唯一归一化函数：Unicode NFC + 换行统一为 ``\\n``。
 

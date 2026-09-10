@@ -615,6 +615,57 @@ async def test_normalize_drama_script_injects_previous_episode_outline(fake_ctx:
     assert "崖底疗伤" in prompt_text
 
 
+async def test_normalize_drama_script_injects_previous_episode_exit_state(fake_ctx: ToolContext) -> None:
+    """第二集的 script_plan prompt 带上集末场退出态（地点/在场角色/道具/末尾动作/末句台词）。"""
+
+    project_path = fake_ctx.project_path
+    src = project_path / "source"
+    src.mkdir(parents=True)
+    (src / "episode_2.txt").write_text("次日，山下", encoding="utf-8")
+    fake_ctx.pm.project_payload["episodes"] = [
+        {"episode": 1, "script_file": "scripts/episode_1.json"},
+        {"episode": 2},
+    ]
+    fake_ctx.pm.script_payload = {
+        "content_mode": "drama",
+        "episode": 1,
+        "scenes": [
+            {
+                "scene_id": "E1S01",
+                "scenes": ["村口"],
+                "characters_in_scene": ["张三"],
+            },
+            {
+                "scene_id": "E1S02",
+                "scenes": ["山洞"],
+                "characters_in_scene": ["张三", "李四"],
+                "props": ["火把"],
+                "utterances": [
+                    {"kind": "dialogue", "speaker": "张三", "text": "我们到了。"},
+                ],
+                "video_prompt": {
+                    "action": "张三举起火把环顾四周",
+                    "camera_motion": "Static",
+                    "ambiance_audio": "风声",
+                },
+            },
+        ],
+    }
+
+    use_fake_caps(fake_ctx)
+    tool_obj = generate_script_plan_tool(fake_ctx)
+    out = await call(tool_obj, {"episode": 2, "dry_run": True})
+    assert out.get("is_error") is not True, out
+    prompt_text = out["content"][0]["text"]
+    assert "<previous_episode_exit_state>" in prompt_text
+    assert "山洞" in prompt_text
+    assert "张三" in prompt_text
+    assert "李四" in prompt_text
+    assert "火把" in prompt_text
+    assert "张三举起火把环顾四周" in prompt_text
+    assert "我们到了。" in prompt_text
+
+
 async def test_normalize_drama_script_passes_project_name_to_backend(fake_ctx: ToolContext, monkeypatch) -> None:
     """工具必须把 ctx.project_name 传给 TextGenerator.create/generate，
     否则项目级文本档位覆盖被跳过，且 usage tracking 会丢 project_name。"""
