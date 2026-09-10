@@ -16,6 +16,7 @@ from lib.episode_ledger import (
     previous_episode_exit_state,
     previous_episode_outline_context,
 )
+from lib.episode_paths import episode_script_relpath
 from lib.episode_target_duration import project_episode_target_duration
 from lib.project_audience import resolve_project_audience_text
 from lib.speech_rate import project_speech_rate_override, speech_rate_units_per_second
@@ -36,6 +37,27 @@ ScriptPlanPromptVariant = Literal["drama", "narration", "reference_video"]
 #: 末场退出态——这是唯一需要磁盘 IO 的 script_plan prompt 输入，因此不像其余输入那样能由
 #: ``project_script_plan_prompt_inputs`` 纯函数自行算出，须由调用方注入读取器。
 PreviousScriptLoader = Callable[[int], dict[str, object] | None]
+
+
+def previous_episode_script_relpath(project: Mapping[str, object], previous_episode: int) -> str:
+    """上集剧本相对项目根路径：单一真相源，供每条读取上集剧本的调用方共用同一份解析结果。
+
+    优先取分集账本登记的 ``script_file``（用户可能改过默认落点）；条目缺失该字段（旧式条目）
+    或整个账本条目都不存在时回退规范路径 ``lib.episode_paths.episode_script_relpath``。
+    ``lib.artifact_planner``（基线预检）与 ``server.text_generation``（生成 / 草稿读时重判）
+    都经本函数解析，确保同一上集剧本身份在两条路径上一致——否则两边算出的 basis 会各自认一份
+    不同的「上集剧本」，即便都启用了退出态也可能对不上号。
+    """
+
+    episodes = project.get("episodes")
+    if isinstance(episodes, list):
+        for entry in episodes:
+            if isinstance(entry, Mapping) and entry.get("episode") == previous_episode:
+                script_file = entry.get("script_file")
+                if isinstance(script_file, str) and script_file:
+                    return script_file
+                break
+    return episode_script_relpath(previous_episode)
 
 
 def decode_script_plan_source(raw: bytes) -> str:

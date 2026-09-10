@@ -24,7 +24,12 @@ from lib.artifact_manifest import (
     ArtifactKey,
     ProjectArtifactManifestAdapter,
 )
-from lib.artifact_provenance import PreviousScriptLoader, ScriptPlanPromptVariant, build_script_plan_request
+from lib.artifact_provenance import (
+    PreviousScriptLoader,
+    ScriptPlanPromptVariant,
+    build_script_plan_request,
+    previous_episode_script_relpath,
+)
 from lib.artifact_registration import ArtifactRegistrationReceipt
 from lib.asset_types import BUCKET_KEY, asset_name_comparison_key
 from lib.async_thread import run_noninterruptible_sync, run_sync_transaction
@@ -51,7 +56,6 @@ from lib.episode_paths import (
     SCRIPT_PLAN_FILENAMES,
     SCRIPT_PLAN_LEGACY_FILENAMES,
     episode_drafts_dir,
-    episode_script_relpath,
     episode_source_relpath,
 )
 from lib.formal_write import FormalWriteReceipt, formal_write_transaction, project_metadata_lock
@@ -546,29 +550,22 @@ def _load_novel_source(project_path: Path, source: str | None, *, episode: int) 
     return novel_text
 
 
-def _previous_episode_script_filename(project: Mapping[str, Any], previous_episode: int) -> str:
-    """上集剧本文件名：优先取账本登记的 ``script_file``，缺失（旧式条目）时回退规范路径。"""
-
-    for entry in project.get("episodes") or []:
-        if isinstance(entry, Mapping) and entry.get("episode") == previous_episode:
-            script_file = entry.get("script_file")
-            if isinstance(script_file, str) and script_file:
-                return script_file
-            break
-    return episode_script_relpath(previous_episode)
-
-
 def _make_previous_script_loader(
     projects: ProjectManager, project_name: str, project: Mapping[str, Any]
 ) -> PreviousScriptLoader:
     """构造只读上集剧本读取器，供 ``previous_episode_exit_state`` 抽取上集末场退出态。
+
+    文件名解析经 ``lib.artifact_provenance.previous_episode_script_relpath`` 单一真相源——
+    生成入口、草稿读时重判（``server/draft_workflow.py``）与基线预检
+    （``lib.artifact_planner``）三处都经它取同一份「上集剧本是哪个文件」的结论，
+    否则某一处认的上集剧本对不上另一处，退出态与 basis 就会分叉。
 
     上集剧本未提交（尚未生成 / 文件缺失）按 None 处理——退出态是可选输入，缺失时提示词
     与不带该参数时逐字相同（见 ``lib.artifact_provenance.project_script_plan_prompt_inputs``）。
     """
 
     def _load(previous_episode: int) -> dict[str, Any] | None:
-        filename = _previous_episode_script_filename(project, previous_episode)
+        filename = previous_episode_script_relpath(project, previous_episode)
         try:
             return projects.load_script_readonly(project_name, filename)
         except FileNotFoundError:
@@ -591,9 +588,11 @@ def _load_script_plan_source_with_basis(
 
     ``projects`` / ``project_name`` 是可选的上集剧本读取能力：仅在都提供时才把
     ``previous_episode_exit_state`` 纳入 prompt / basis（见 ``_make_previous_script_loader``）。
-    两条生成入口（``generate_drama_script_plan`` 等）都传入；``server/draft_workflow.py`` 的草稿
-    读时重判不依赖 ``ProjectManager``（同函数供内容确认复用，见其 docstring），缺省时退出态
-    静默省略——与「未设不进 basis」同一口径，不影响其余输入的投影或重判结果。
+    这是计算 script_plan basis 的唯一入口——生成入口（``generate_drama_script_plan`` 等）与
+    ``server/draft_workflow.py`` 的草稿读时重判都经它传入各自持有的 ``ProjectManager`` /
+    项目名；两者算出的 basis 因此对同一上集剧本状态给出同一个 digest，不会出现「生成时纳入
+    退出态、重判时又判不带退出态的旧基线」的分叉。仍缺省时（如无 ``ProjectManager`` 可用的
+    极端调用路径）退出态静默省略——与「未设不进 basis」同一口径，不影响其余输入的投影。
     """
 
     novel_text = _load_novel_source(project_path, source, episode=episode)
