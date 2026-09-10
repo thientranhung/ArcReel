@@ -2378,6 +2378,49 @@ async def execute_character_voice_sample_task(
     }
 
 
+VIDEO_QUOTE_DRIFT_WARNING = "video_quote_drift"
+"""告警键：任务提交时留痕的报价（``payload['quote']``）与执行期实际解析的 provider / model /
+分辨率 / 时长不一致。不影响任务状态、不阻断执行——ADR-0061 明确执行期恒以当次重新解析的
+配置为准，这条 warning 只是把「实付可能与提交时展示的预估不同」如实告诉用户，供对账。"""
+
+
+def _video_quote_drift_warning(
+    payload: dict[str, Any],
+    *,
+    live_provider_id: str,
+    live_model_id: str,
+    live_resolution: str | None,
+    live_duration_seconds: int | None,
+) -> dict[str, Any] | None:
+    """比对留痕报价与执行期实际解析值，不一致则返回一条 warning（一致或无留痕时 ``None``）。
+
+    只比对留痕报价实际携带的字段——``duration_seconds`` 目前源自
+    ``VideoRequestQuote.to_payload()``，尚不含 ``resolution``（见本分支报告的已知缺口），
+    因此分辨率漂移暂不参与判定，避免拿一个从未留痕过的维度误报。
+    """
+
+    quote = payload.get("quote")
+    if not isinstance(quote, dict):
+        return None
+    mismatches: dict[str, Any] = {}
+    if quote.get("provider_id") not in (None, live_provider_id):
+        mismatches["provider_id"] = {"quoted": quote.get("provider_id"), "live": live_provider_id}
+    if quote.get("model_id") not in (None, live_model_id):
+        mismatches["model_id"] = {"quoted": quote.get("model_id"), "live": live_model_id}
+    if quote.get("duration_seconds") not in (None, live_duration_seconds):
+        mismatches["duration_seconds"] = {"quoted": quote.get("duration_seconds"), "live": live_duration_seconds}
+    if not mismatches:
+        return None
+    return {
+        "key": VIDEO_QUOTE_DRIFT_WARNING,
+        "params": {
+            "quote": quote,
+            "mismatches": mismatches,
+            "live_resolution": live_resolution,
+        },
+    }
+
+
 async def execute_video_task(
     project_name: str,
     resource_id: str,
@@ -2532,6 +2575,14 @@ async def execute_video_task(
         duration_seconds = (
             duration_tiers[0] if duration_tiers else _get_model_default_duration(registry_provider_id, model_name)
         )
+
+    quote_drift_warning = _video_quote_drift_warning(
+        payload,
+        live_provider_id=registry_provider_id,
+        live_model_id=model_name,
+        live_resolution=resolution,
+        live_duration_seconds=duration_seconds,
+    )
 
     delivery_projection = None
     if delivery_options.narration_delivery == USE_TTS:
@@ -2798,6 +2849,7 @@ async def execute_video_task(
                 version=version,
                 video_uri=video_uri,
                 generator=generator,
+                quote_drift_warning=quote_drift_warning,
             )
 
         return await complete_video_artifact_commit(
@@ -2825,6 +2877,7 @@ async def _finalize_video_task(
     version: int,
     video_uri: str | None,
     generator: Any,
+    quote_drift_warning: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Normal + resume 共用的 finalize 逻辑：写 scene asset + 抽缩略图 + 返回 result dict。"""
 
@@ -2865,7 +2918,7 @@ async def _finalize_video_task(
         lambda: generator.versions.get_versions("videos", resource_id)["versions"][-1]["created_at"]
     )
 
-    return {
+    result: dict[str, Any] = {
         "version": version,
         "file_path": f"videos/scene_{resource_id}.mp4",
         "created_at": created_at,
@@ -2873,6 +2926,9 @@ async def _finalize_video_task(
         "resource_id": resource_id,
         "video_uri": video_uri,
     }
+    if quote_drift_warning is not None:
+        result["warnings"] = [quote_drift_warning]
+    return result
 
 
 async def execute_character_task(

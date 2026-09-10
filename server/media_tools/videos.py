@@ -348,6 +348,32 @@ def _batch_admission_response(
     return ToolOutcome(value=payload)
 
 
+def _stamp_quote_payload(specs: list[TaskSpec], admission: BatchAdmission) -> None:
+    """把整批准入已经查过的报价原样写进每个 spec 的 payload，供任务落盘后做漂移对照。
+
+    只服务于事后留痕：执行期仍按 ADR-0061 / ADR-0056 重新解析当前 provider / model /
+    分辨率，这份快照从不参与执行路径的任何判定；执行完毕后与实际解析值不一致时，
+    ``execute_video_task`` 据此追加一条 warning（不影响任务状态，见 ``lib.batch_admission``
+    与最近的 594b69ee / c09ee1f8：warnings 与状态正交）。
+    """
+
+    costs = {ticket.unit_id: ticket.request_cost for ticket in admission.tickets if ticket.request_cost}
+    for spec in specs:
+        cost = costs.get(spec.resource_id)
+        if cost is None:
+            continue
+        spec.payload = {
+            **(spec.payload or {}),
+            "quote": {
+                "provider_id": cost.get("provider_id"),
+                "model_id": cost.get("model_id"),
+                "duration_seconds": cost.get("request_duration_seconds"),
+                "amount": cost.get("amount"),
+                "currency": cost.get("currency"),
+            },
+        }
+
+
 def _apply_delivery_payload(
     specs: list[TaskSpec],
     request_options: ReferenceRequestOptions,
@@ -412,6 +438,7 @@ async def _admit_storyboard_specs(
     )
     if admission.admitted:
         _apply_delivery_payload(specs, request_options, confirmed_request_durations)
+        _stamp_quote_payload(specs, admission)
     return admission
 
 
@@ -723,6 +750,7 @@ async def _generate_reference_units(
         spec.payload = {**(spec.payload or {}), "reference_request_options": unit_options.to_payload()}
         spec.unit_id = spec.resource_id
         spec.source = ctx.caller.source
+    _stamp_quote_payload(specs, admission)
 
     async def _wait_reference_batch(**kwargs: Any) -> tuple[list[BatchTaskResult], list[BatchTaskResult]]:
         return await batch_enqueue_and_wait(stop_on_failure=True, **kwargs)
