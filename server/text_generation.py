@@ -867,6 +867,7 @@ async def generate_drama_script_plan(
             source_language=cast(str | None, prompt_inputs["source_language"]),
             speech_rate_override=cast(float | None, prompt_inputs["speech_rate_override"]),
             episode_target_duration=cast(int | None, prompt_inputs["episode_target_duration"]),
+            audience=cast(str | None, prompt_inputs.get("audience")),
         )
         prompt = append_user_instructions(prompt, instructions)
 

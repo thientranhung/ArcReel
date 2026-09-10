@@ -607,6 +607,52 @@ def test_script_plan_basis_tracks_a_set_episode_target_duration() -> None:
     assert retargeted.digest != targeted.digest
 
 
+def test_script_plan_basis_ignores_an_unset_audience_on_drama() -> None:
+    """未设受众（无显式字段、overview 也无线索）时 basis 不因该键存在而变——同 episode_target_duration 口径。"""
+    project = {"content_mode": "drama", "generation_mode": "storyboard"}
+
+    unset = build_script_plan_basis("source", episode=1, project=project)
+    explicit_null = build_script_plan_basis("source", episode=1, project={**project, "audience": None})
+
+    assert explicit_null.digest == unset.digest
+
+
+def test_script_plan_basis_tracks_an_explicit_audience_on_drama() -> None:
+    project = {"content_mode": "drama", "generation_mode": "storyboard"}
+
+    unset = build_script_plan_basis("source", episode=1, project=project)
+    kids = build_script_plan_basis("source", episode=1, project={**project, "audience": "儿童 6-10 岁"})
+    adult = build_script_plan_basis("source", episode=1, project={**project, "audience": "成人"})
+
+    assert kids.digest != unset.digest
+    assert adult.digest != unset.digest
+    assert adult.digest != kids.digest
+
+
+def test_script_plan_basis_falls_back_to_overview_for_audience_on_drama() -> None:
+    """未设显式 audience 字段时退回 overview 的 world_setting / theme 文本——存量项目（受众写在 overview 里）同样让 basis 感知变化。"""
+    project = {"content_mode": "drama", "generation_mode": "storyboard", "overview": {}}
+
+    unset = build_script_plan_basis("source", episode=1, project=project)
+    with_overview_cue = build_script_plan_basis(
+        "source",
+        episode=1,
+        project={**project, "overview": {"world_setting": "面向儿童 6-10 岁的睡前故事"}},
+    )
+
+    assert with_overview_cue.digest != unset.digest
+
+
+def test_script_plan_basis_ignores_audience_on_narration() -> None:
+    """受众 gear 只接入 drama：narration 的 script_plan basis 不受 audience 字段影响。"""
+    project = {"content_mode": "narration", "generation_mode": "storyboard"}
+
+    unset = build_script_plan_basis("source", episode=1, project=project)
+    with_audience = build_script_plan_basis("source", episode=1, project={**project, "audience": "儿童 6-10 岁"})
+
+    assert with_audience.digest == unset.digest
+
+
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [

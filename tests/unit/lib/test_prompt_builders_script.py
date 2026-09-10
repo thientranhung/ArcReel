@@ -332,6 +332,76 @@ class TestScreenplaySourceKind:
         assert self._squash(render_pacing_section("drama")) in self._squash(self._normalize_prompt("novel"))
 
 
+class TestAudienceGearWiring:
+    """受众 gear 区块在 build_normalize_prompt 与 build_drama_prompt 两条 drama prompt 中的接入。"""
+
+    def _normalize_prompt(self, **overrides) -> str:
+        kwargs = {
+            "novel_text": "【第1集】角色甲：「你好」",
+            "project_overview": {"synopsis": "S", "genre": "G", "theme": "T", "world_setting": "W"},
+            "style": "动漫",
+            "characters": {"角色甲": {}},
+            "scenes": {},
+            "props": {},
+            "default_duration": 8,
+            "supported_durations": [4, 6, 8],
+            "episode": 1,
+        }
+        kwargs.update(overrides)
+        return build_normalize_prompt(**kwargs)
+
+    def _drama_prompt_authoring_prompt(self, **overrides) -> str:
+        kwargs = {
+            "project_overview": {"synopsis": "动作", "genre": "动作", "theme": "成长", "world_setting": "近未来"},
+            "style": "赛博",
+            "style_description": "high contrast",
+            "scenes_content": "### E1S01（时长 8 秒）\n视觉改编：天台追逐",
+            "episode": 1,
+            "aspect_ratio": "16:9",
+        }
+        kwargs.update(overrides)
+        return build_drama_prompt(**kwargs)
+
+    def test_normalize_prompt_has_no_audience_block_by_default(self):
+        assert "面向儿童" not in self._normalize_prompt()
+
+    def test_normalize_prompt_renders_kids_gear_when_audience_indicates_children(self):
+        prompt = self._normalize_prompt(audience="儿童 6-10 岁")
+        assert "面向儿童（约 6-10 岁）观众的创作规则" in prompt
+        assert "jump-scare" in prompt
+
+    def test_normalize_prompt_ignores_adult_audience(self):
+        assert "面向儿童" not in self._normalize_prompt(audience="都市情感，成年观众")
+
+    def test_normalize_prompt_renders_when_caller_resolves_overview_fallback(self):
+        """build_normalize_prompt 本身不读 project.json——退回 overview 文本是调用方
+        （lib.project_audience.resolve_project_audience_text）的职责；这里断言二者接得上：
+        调用方解析出的文本原样传入后，儿童 gear 正常渲染。"""
+        from lib.project_audience import resolve_project_audience_text
+
+        project = {"overview": {"world_setting": "面向儿童 6-10 岁的睡前故事", "theme": "友谊"}}
+        prompt = self._normalize_prompt(
+            project_overview={
+                "synopsis": "S",
+                "genre": "G",
+                "theme": "T",
+                "world_setting": "面向儿童 6-10 岁的睡前故事",
+            },
+            audience=resolve_project_audience_text(project),
+        )
+        assert "面向儿童（约 6-10 岁）观众的创作规则" in prompt
+
+    def test_drama_prompt_authoring_has_no_audience_block_by_default(self):
+        assert "面向儿童" not in self._drama_prompt_authoring_prompt()
+
+    def test_drama_prompt_authoring_renders_kids_gear_when_audience_indicates_children(self):
+        prompt = self._drama_prompt_authoring_prompt(audience="kids 6-10")
+        assert "面向儿童（约 6-10 岁）观众的创作规则" in prompt
+
+    def test_drama_prompt_authoring_ignores_adult_audience(self):
+        assert "面向儿童" not in self._drama_prompt_authoring_prompt(audience="adult drama")
+
+
 class TestOverviewPrompt:
     """source_kind=screenplay 下 overview prompt 翻为「提取优先」：作者写下的创作方案前言优先照用、
     缺失才退回从正文归纳。只断言语义关键词在场/缺席与分支路由，不锁逐字措辞、不测 LLM 提取质量。"""
