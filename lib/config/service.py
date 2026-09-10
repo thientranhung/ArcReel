@@ -240,6 +240,15 @@ class ConfigService:
         raw = await self._setting_repo.get("default_audio_backend", _DEFAULT_AUDIO_BACKEND)
         return self._parse_backend(raw, _DEFAULT_AUDIO_BACKEND)
 
+    async def get_visual_qa_external_command(self) -> str | None:
+        """视觉质检的外部命令模板（全局 setting）；空白/未设置视为「用项目文本 backend」。"""
+        raw = await self._setting_repo.get("visual_qa_external_command", "")
+        text = raw.strip()
+        return text or None
+
+    async def set_visual_qa_external_command(self, value: str | None) -> None:
+        await self._setting_repo.set("visual_qa_external_command", (value or "").strip())
+
     async def get_narration_voice(self) -> str:
         # 空白 setting 视为未配置，与项目级覆盖的 strip 语义一致，避免空音色进 TTS 请求
         raw = await self._setting_repo.get("narration_voice", "")

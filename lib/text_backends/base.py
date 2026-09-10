@@ -161,6 +161,7 @@ class TextTaskType(StrEnum):
     SCRIPT = "script"
     OVERVIEW = "overview"
     STYLE_ANALYSIS = "style"
+    VISUAL_QA = "visual_qa"
 
 
 class TextTaskTier(StrEnum):
@@ -180,13 +181,14 @@ TEXT_TASK_TIERS: dict[TextTaskType, TextTaskTier] = {
     TextTaskType.SCRIPT: TextTaskTier.COMPLEX,
     TextTaskType.OVERVIEW: TextTaskTier.SIMPLE,
     TextTaskType.STYLE_ANALYSIS: TextTaskTier.SIMPLE,
+    TextTaskType.VISUAL_QA: TextTaskTier.COMPLEX,
 }
 
 if _missing := set(TextTaskType) - set(TEXT_TASK_TIERS):
     raise RuntimeError(f"TextTaskType 成员未归档到 TEXT_TASK_TIERS: {sorted(m.value for m in _missing)}")
 
 # 需要图像输入（vision）能力的任务。解析出的模型不支持 vision 时直接报错，不静默换模型。
-VISION_REQUIRED_TASKS: frozenset[TextTaskType] = frozenset({TextTaskType.STYLE_ANALYSIS})
+VISION_REQUIRED_TASKS: frozenset[TextTaskType] = frozenset({TextTaskType.STYLE_ANALYSIS, TextTaskType.VISUAL_QA})
 
 
 @dataclass

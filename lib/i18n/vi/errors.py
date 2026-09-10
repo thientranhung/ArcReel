@@ -326,6 +326,10 @@ MESSAGES = {
     "ref_payload_too_large": "Dữ liệu ảnh tham chiếu vượt giới hạn của nhà cung cấp, đã thử lại với mức nén bổ sung",
     "ref_payload_floor_exceeded": "Ảnh tham chiếu quá lớn hoặc quá nhiều; ngay cả khi nén ở mức chất lượng thấp nhất vẫn vượt giới hạn kích thước yêu cầu của nhà cung cấp. Vui lòng giảm số lượng ảnh tham chiếu hoặc độ phân giải rồi thử lại",
     "ref_sora_single_ref": "Chế độ tham chiếu Sora hiện không hỗ trợ nhiều ảnh, đã hạ về một ảnh",
+    "visual_qa.regenerate_suggested": (
+        "Kiểm định hình ảnh đề xuất tạo lại: nội dung {content}/5, nhất quán tài sản {asset}/5, "
+        "phong cách {style}/5, phù hợp đối tượng {audience}/5. {notes}"
+    ),
     "ref_episode_not_found": "Không tìm thấy tập {episode}",
     "ref_not_reference_video_mode": "Kịch bản của tập này không ở chế độ video tham chiếu",
     "ref_unit_not_found": "Không tìm thấy đơn vị video '{unit_id}'",
