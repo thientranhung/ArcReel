@@ -13,6 +13,7 @@ from typing import Literal
 from lib.artifact_manifest import ArtifactBasis
 from lib.episode_ledger import episode_outline_context, previous_episode_outline_context
 from lib.episode_target_duration import project_episode_target_duration
+from lib.project_audience import resolve_project_audience_text
 from lib.speech_rate import project_speech_rate_override, speech_rate_units_per_second
 from lib.text_metrics import reading_unit_noun
 from lib.text_utils import normalize_newlines
@@ -179,6 +180,9 @@ def project_script_plan_prompt_inputs(
             {
                 "source_kind": source_kind,
                 "style": _optional_string(project.get("style"), "style"),
+                # 受众 gear（目前只有儿童档位）只在 drama 用到；未设受众时为 None，
+                # 由 _freeze_script_plan_prompt_inputs 剔出 basis（此时 prompt 与不带该参数时逐字相同）。
+                "audience": resolve_project_audience_text(project),
             }
         )
 
@@ -230,6 +234,10 @@ def _freeze_script_plan_prompt_inputs(
     # 才进 basis——那时提示词确实变了，冻结的基线就该失效。
     if frozen.get("episode_target_duration") is None:
         frozen.pop("episode_target_duration", None)
+    # 未设受众时同一口径剔出 basis：此时受众 gear 不渲染，prompt 与不带该参数时逐字相同，
+    # 把 None 写进 digest 会让每个从未设置过 audience 的存量项目的脚本规划产物一并判 stale。
+    if frozen.get("audience") is None:
+        frozen.pop("audience", None)
     return frozen
 
 
@@ -309,7 +317,7 @@ def project_episode_script_prompt_inputs(project: Mapping[str, object]) -> dict[
     if not isinstance(target_language, str):
         raise ValueError("episode script source_language must be a string or null")
 
-    return {
+    inputs: dict[str, object] = {
         "overview": {field: overview.get(field, "") for field in (*_AD_OVERVIEW_FIELDS, "world_setting")},
         "style": _optional_string(project.get("style"), "style"),
         "style_description": _optional_string(project.get("style_description"), "style_description"),
@@ -319,6 +327,13 @@ def project_episode_script_prompt_inputs(project: Mapping[str, object]) -> dict[
         "scenes": _project_prompt_authoring_assets(project.get("scenes"), generation_mode=generation_mode),
         "props": _project_prompt_authoring_assets(project.get("props"), generation_mode=generation_mode),
     }
+    if content_mode == "drama":
+        # 受众 gear 只在 drama prompt_authoring 用到（narration / reference_video 未接入）；
+        # 只在设了受众时进 basis，未设时不改变从未用过该设置的存量项目的 digest。
+        audience = resolve_project_audience_text(project)
+        if audience is not None:
+            inputs["audience"] = audience
+    return inputs
 
 
 def build_ad_episode_script_basis(episode: int, *, project: Mapping[str, object]) -> ArtifactBasis:
