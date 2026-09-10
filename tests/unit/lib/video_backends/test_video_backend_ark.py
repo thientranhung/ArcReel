@@ -11,6 +11,7 @@ import respx
 
 from lib.video_backends.ark import ArkVideoBackend
 from lib.video_backends.base import (
+    ProviderGenerationFailedError,
     ReferenceAudioMode,
     VideoCapabilityError,
     VideoGenerationRequest,
@@ -279,6 +280,7 @@ class TestArkGenerate:
         ark_backend._client.content_generation.tasks.create.assert_not_called()
 
     async def test_failed_task_raises(self, ark_backend, tmp_path):
+        """``error`` 是裸字符串（无结构化 code）时仍保留历史可读文案，code 落空。"""
         output = tmp_path / "out.mp4"
 
         create_result = MagicMock()
@@ -291,8 +293,59 @@ class TestArkGenerate:
         ark_backend._client.content_generation.tasks.get = MagicMock(return_value=get_result)
 
         request = VideoGenerationRequest(prompt="test", output_path=output)
-        with pytest.raises(RuntimeError, match="Ark 视频生成失败"):
+        with pytest.raises(RuntimeError, match="Ark 视频生成失败") as excinfo:
             await ark_backend.generate(request)
+
+        assert isinstance(excinfo.value, ProviderGenerationFailedError)
+        assert excinfo.value.status == "failed"
+        assert excinfo.value.provider_code is None
+        assert excinfo.value.provider_message == "content violation"
+        assert str(excinfo.value) == "Ark 视频生成失败(status=failed): content violation"
+
+    async def test_failed_task_with_structured_code_carries_provider_code(self, ark_backend, tmp_path):
+        """``error`` 是带 code/message 的结构化对象（Ark SDK ``ContentGenerationError`` 形态）
+        时，机器码与原文分列落在 ``provider_code`` / ``provider_message`` 上。"""
+        output = tmp_path / "out.mp4"
+
+        create_result = MagicMock()
+        create_result.id = "cgt-fail-code"
+        ark_backend._client.content_generation.tasks.create = MagicMock(return_value=create_result)
+
+        error = MagicMock()
+        error.code = "OutputVideoSensitiveContentDetected"
+        error.message = "generated video flagged by content safety"
+        get_result = MagicMock()
+        get_result.status = "failed"
+        get_result.error = error
+        ark_backend._client.content_generation.tasks.get = MagicMock(return_value=get_result)
+
+        request = VideoGenerationRequest(prompt="test", output_path=output)
+        with pytest.raises(ProviderGenerationFailedError) as excinfo:
+            await ark_backend.generate(request)
+
+        assert excinfo.value.status == "failed"
+        assert excinfo.value.provider_code == "OutputVideoSensitiveContentDetected"
+        assert excinfo.value.provider_message == "generated video flagged by content safety"
+
+    async def test_expired_task_status_string_is_preserved(self, ark_backend, tmp_path):
+        """``status=expired`` 仍要出现在异常消息里：``_is_ark_not_found`` 靠这个子串识别过期。"""
+        output = tmp_path / "out.mp4"
+
+        create_result = MagicMock()
+        create_result.id = "cgt-expired"
+        ark_backend._client.content_generation.tasks.create = MagicMock(return_value=create_result)
+
+        get_result = MagicMock()
+        get_result.status = "expired"
+        get_result.error = None
+        ark_backend._client.content_generation.tasks.get = MagicMock(return_value=get_result)
+
+        request = VideoGenerationRequest(prompt="test", output_path=output)
+        with pytest.raises(ProviderGenerationFailedError) as excinfo:
+            await ark_backend.generate(request)
+
+        assert excinfo.value.status == "expired"
+        assert "status=expired" in str(excinfo.value)
 
     async def test_with_seed_and_flex(self, ark_backend, tmp_path):
         output = tmp_path / "out.mp4"

@@ -11,7 +11,7 @@ import httpx
 
 
 class ProviderRejectedError(httpx.HTTPStatusError):
-    """上游确定性 4xx 拒绝，可另带脱敏截断后的拒因摘要。
+    """上游确定性 4xx 拒绝，可另带脱敏截断后的拒因摘要与结构化拒因码。
 
     仍是 ``httpx.HTTPStatusError``：重试谓词与既有 ``except httpx.HTTPStatusError`` 分支
     照常按 status_code 判定，只是多出一个 ``provider_reason`` 供落库侧单独取用——摘要是
@@ -19,6 +19,10 @@ class ProviderRejectedError(httpx.HTTPStatusError):
 
     摘要可以缺席（响应体为空、认证类状态码不透传、字段全不认得），此时 ``provider_reason``
     为 ``None``：拒绝这件事本身仍要结构化落库，否则读侧拿不到状态码与「修改输入」的后续动作。
+
+    ``provider_code`` 是响应体里与拒因同层的机器码（如 ``error.code``），取到就带上；它比
+    ``provider_reason``（自然语言摘要）更适合用来分类拒绝原因（见 ``lib.moderation_rewrite``）
+    ——只信结构化字段，不从自然语言原文倒推分类（ADR 0052）。同样可以缺席。
     """
 
     def __init__(
@@ -28,9 +32,11 @@ class ProviderRejectedError(httpx.HTTPStatusError):
         request: httpx.Request,
         response: httpx.Response,
         provider_reason: str | None = None,
+        provider_code: str | None = None,
     ) -> None:
         super().__init__(message, request=request, response=response)
         self.provider_reason = provider_reason
+        self.provider_code = provider_code
 
 
 class ArtifactDownloadError(RuntimeError):
@@ -59,14 +65,20 @@ def redacted_status_error(exc: httpx.HTTPStatusError, *, provider_reason: str | 
     return httpx.HTTPStatusError(_redacted_message(exc), request=exc.request, response=exc.response)
 
 
-def provider_rejected_error(exc: httpx.HTTPStatusError, *, provider_reason: str | None) -> ProviderRejectedError:
+def provider_rejected_error(
+    exc: httpx.HTTPStatusError, *, provider_reason: str | None, provider_code: str | None = None
+) -> ProviderRejectedError:
     """确定性 4xx 的提交被拒：同一响应，换一条不含查询串与 userinfo 的消息，摘要可缺席。
 
     摘要有无都走这条：读侧靠异常类型认出「被拒」，据此渲染本地化文案并给出 FIX_INPUT；
-    只按摘要有无分流会让空响应体与不透传的认证失败退回裸状态行。
+    只按摘要有无分流会让空响应体与不透传的认证失败退回裸状态行。``provider_code`` 同理可缺席。
     """
     return ProviderRejectedError(
-        _redacted_message(exc), request=exc.request, response=exc.response, provider_reason=provider_reason
+        _redacted_message(exc),
+        request=exc.request,
+        response=exc.response,
+        provider_reason=provider_reason,
+        provider_code=provider_code,
     )
 
 
