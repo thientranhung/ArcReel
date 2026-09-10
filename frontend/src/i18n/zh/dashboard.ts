@@ -1922,6 +1922,10 @@ export default {
   'narration_delivery_label': '旁白交付',
   'narration_delivery_post_production': '后期配音',
   'narration_delivery_use_tts': '使用当前 TTS',
+  'audio_mode_label': '声音归属',
+  'audio_mode_default': '默认（沿用整集设置）',
+  'audio_mode_model': '模型原声',
+  'audio_mode_tts': '旁白配音',
 
   // 自定义调用端点
   'ce_section_title': '调用端点',

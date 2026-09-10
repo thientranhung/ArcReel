@@ -532,6 +532,91 @@ async def test_episode_tts_materialization_keeps_video_without_selected_narratio
     ]
 
 
+async def test_episode_scene_audio_mode_forces_native_over_project_default_tts(tmp_path: Path) -> None:
+    pm, project_path, settings = _setup_narrator_project(tmp_path)
+    script_path = project_path / "scripts" / "episode_1.json"
+    script = json.loads(script_path.read_text(encoding="utf-8"))
+    script["segments"][0]["audio_mode"] = "model"
+    _write_json(script_path, script)
+
+    async def probe(path: Path) -> float | None:
+        return 4.5 if path.suffix == ".wav" else 6.25
+
+    service = PresentationReadModelService(
+        pm,
+        settings_resolver_factory=lambda _project_name, _project_path: _SettingsResolver(settings),
+        duration_probe=probe,
+    )
+
+    materialized = await service.materialize_episode(
+        project_name="demo",
+        episode=1,
+        variant="use_tts",
+    )
+
+    assert [(result.presentation.unit_id, result.presentation.variant) for result in materialized.presentations] == [
+        ("E1S01", "post_production"),
+    ]
+
+
+async def test_episode_scene_audio_mode_forces_tts_over_project_default_post_production(tmp_path: Path) -> None:
+    pm, project_path, settings = _setup_narrator_project(tmp_path)
+    script_path = project_path / "scripts" / "episode_1.json"
+    script = json.loads(script_path.read_text(encoding="utf-8"))
+    script["segments"][0]["audio_mode"] = "tts"
+    _write_json(script_path, script)
+
+    async def probe(path: Path) -> float | None:
+        return 4.5 if path.suffix == ".wav" else 6.25
+
+    service = PresentationReadModelService(
+        pm,
+        settings_resolver_factory=lambda _project_name, _project_path: _SettingsResolver(settings),
+        duration_probe=probe,
+    )
+
+    materialized = await service.materialize_episode(
+        project_name="demo",
+        episode=1,
+        variant="post_production",
+    )
+
+    assert [(result.presentation.unit_id, result.presentation.variant) for result in materialized.presentations] == [
+        ("E1S01", "use_tts"),
+    ]
+
+
+async def test_episode_scene_audio_mode_tts_falls_back_to_native_without_selected_narration(tmp_path: Path) -> None:
+    pm, project_path, settings = _setup_narrator_project(tmp_path)
+    _add_second_narrator_video(project_path)
+    script_path = project_path / "scripts" / "episode_1.json"
+    script = json.loads(script_path.read_text(encoding="utf-8"))
+    # E1S02 has no committed narration audio version (see _add_second_narrator_video); asking
+    # for "tts" there must never produce a silent scene, so it falls back to native audio.
+    script["segments"][1]["audio_mode"] = "tts"
+    _write_json(script_path, script)
+
+    async def probe(path: Path) -> float | None:
+        return 4.5 if path.suffix == ".wav" else 6.25
+
+    service = PresentationReadModelService(
+        pm,
+        settings_resolver_factory=lambda _project_name, _project_path: _SettingsResolver(settings),
+        duration_probe=probe,
+    )
+
+    materialized = await service.materialize_episode(
+        project_name="demo",
+        episode=1,
+        variant="post_production",
+    )
+
+    assert [(result.presentation.unit_id, result.presentation.variant) for result in materialized.presentations] == [
+        ("E1S01", "post_production"),
+        ("E1S02", "post_production"),
+    ]
+
+
 async def test_episode_materialization_restarts_as_one_snapshot_after_script_edit(tmp_path: Path) -> None:
     pm, project_path, settings = _setup_narrator_project(tmp_path)
     _add_second_narrator_video(project_path)

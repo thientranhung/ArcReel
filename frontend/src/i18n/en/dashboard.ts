@@ -1923,6 +1923,10 @@ export default {
   'narration_delivery_label': 'Narration delivery',
   'narration_delivery_post_production': 'Add in post-production',
   'narration_delivery_use_tts': 'Use current TTS',
+  'audio_mode_label': 'Audio source',
+  'audio_mode_default': 'Default (use episode setting)',
+  'audio_mode_model': 'Model voice',
+  'audio_mode_tts': 'Narration voiceover',
 
   // 自定义调用端点
   'ce_section_title': 'Endpoints',

@@ -247,6 +247,12 @@ export interface NarrationSegment {
    * 避免绕过快照复制写出悬空引用（见 server/routers/end_frames.py）。
    */
   end_frame_image?: string | null;
+  /**
+   * 分镜声音归属覆盖：`null`/缺省 = 沿用整集默认；`"model"` = 保留模型原声、
+   * 不出旁白配音；`"tts"` = 优先旁白配音（无旁白音频时回退原生声轨，见
+   * `lib.narration_delivery.resolve_scene_audio_mode`）。
+   */
+  audio_mode?: "model" | "tts" | null;
   generated_assets?: GeneratedAssets;
 }
 
@@ -273,6 +279,8 @@ export interface DramaScene {
    * 避免绕过快照复制写出悬空引用（见 server/routers/end_frames.py）。
    */
   end_frame_image?: string | null;
+  /** 见 NarrationSegment.audio_mode 同名字段说明。 */
+  audio_mode?: "model" | "tts" | null;
   generated_assets?: GeneratedAssets;
 }
 
