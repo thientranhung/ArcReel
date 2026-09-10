@@ -108,6 +108,33 @@ class TestProjectsRouter:
             assert seg2["scenes"] == ["Castle"]
             assert seg2["props"] == []
 
+    def test_update_segment_sets_and_resets_audio_mode(self, tmp_path, monkeypatch):
+        fake_pm = _FakePM(tmp_path)
+        fake_pm.scripts[("ready", "narration.json")] = {
+            "content_mode": "narration",
+            "segments": [{"segment_id": "E1S01", "duration_seconds": 4, "characters_in_segment": []}],
+        }
+
+        client = build_projects_client(monkeypatch, fake_pm)
+
+        with client:
+            set_tts = client.patch(
+                "/api/v1/projects/ready/segments/E1S01",
+                json={"script_file": "narration.json", "audio_mode": "tts"},
+            )
+            assert set_tts.status_code == 200
+            assert set_tts.json()["segment"]["audio_mode"] == "tts"
+
+            # 显式写 null 重置为整集默认（与 note 同权：null 不被当「未提供」丢弃）
+            reset = client.patch(
+                "/api/v1/projects/ready/segments/E1S01",
+                json={"script_file": "narration.json", "audio_mode": None},
+            )
+            assert reset.status_code == 200
+            assert reset.json()["segment"]["audio_mode"] is None
+            # 值合法性由 Pydantic Literal 校验（见 test_script_batch_edit.py 的
+            # test_update_rejects_unsupported_scene_audio_mode_value，走真实 ProjectManager）。
+
     def test_update_segment_allows_unchanged_legacy_mixed_speech(self, tmp_path, monkeypatch):
         fake_pm = _FakePM(tmp_path)
         prompt = {"dialogue": [{"speaker": "Alice", "line": "快走。"}]}
@@ -262,6 +289,30 @@ class TestProjectsRouter:
             )
             assert update_overview.status_code == 200
             assert update_overview.json()["overview"]["synopsis"] == "new synopsis"
+
+    def test_update_scene_sets_and_resets_audio_mode(self, tmp_path, monkeypatch):
+        fake_pm = _FakePM(tmp_path)
+        fake_pm.scripts[("ready", "episode_1.json")] = {
+            "content_mode": "drama",
+            "scenes": [{"scene_id": "001", "duration_seconds": 8, "characters_in_scene": []}],
+        }
+
+        client = build_projects_client(monkeypatch, fake_pm)
+
+        with client:
+            set_model = client.patch(
+                "/api/v1/projects/ready/script-scenes/001",
+                json={"script_file": "episode_1.json", "updates": {"audio_mode": "model"}},
+            )
+            assert set_model.status_code == 200
+            assert set_model.json()["scene"]["audio_mode"] == "model"
+
+            reset = client.patch(
+                "/api/v1/projects/ready/script-scenes/001",
+                json={"script_file": "episode_1.json", "updates": {"audio_mode": None}},
+            )
+            assert reset.status_code == 200
+            assert reset.json()["scene"]["audio_mode"] is None
 
     def test_update_scene_atomically_rejects_mixed_utterances(self, tmp_path, monkeypatch):
         # 人工编辑不能把一次视频请求写成角色发声 + 叙述旁白混合单元。

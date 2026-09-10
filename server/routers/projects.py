@@ -938,6 +938,15 @@ async def update_project(name: str, req: UpdateProjectRequest, _t: Translator):
                     project["title"] = req.title
                 if req.style is not None:
                     project["style"] = req.style
+                    # 自由文本风格与「选中内置模版」/「上传自定义参考图」三选一互斥：单独 PATCH
+                    # style（不在同一请求里显式带 style_template_id）时按「脱离模版改自定义」
+                    # 处理，清掉指向已不匹配 style 文本的 style_template_id 及参考图痕迹，避免
+                    # style_template_id 残留但展开文本已被覆盖的孤儿态。请求同时显式给了
+                    # style_template_id 时以下方模版分支为准，不在这里重复处理。
+                    if "style_template_id" not in req.model_fields_set:
+                        project.pop("style_template_id", None)
+                        project.pop("style_image", None)
+                        project.pop("style_description", None)
                 for field in (*_PROJECT_BACKEND_FIELDS, "audio_backend"):
                     if field in req.model_fields_set:
                         value = getattr(req, field)
@@ -1253,10 +1262,14 @@ async def update_scene(
                 "segment_break",
                 "utterances",
                 "note",
+                "audio_mode",
             }
+            # note / audio_mode 允许显式写回 null（清空备注 / 重置为整集默认声音归属）；
+            # 其余字段的 null 视为未提供,不参与本次 PATCH。
+            _nullable = {"note", "audio_mode"}
             fields: dict[str, Any] = {}
             for key, raw_value in req.updates.items():
-                if key not in allowed or (raw_value is None and key != "note"):
+                if key not in allowed or (raw_value is None and key not in _nullable):
                     continue
                 value = raw_value
                 if key in {"characters_in_scene", "scenes", "props"} and isinstance(value, list):
@@ -1467,6 +1480,7 @@ class UpdateSegmentRequest(BaseModel):
     video_prompt: dict | str | None = None
     transition_to_next: str | None = None
     note: str | None = None
+    audio_mode: str | None = None
     characters_in_segment: list[str] | None = None
     scenes: list[str] | None = None
     props: list[str] | None = None
@@ -1525,6 +1539,8 @@ async def update_segment(
                     fields[field] = value
             if "note" in req.model_fields_set:
                 fields["note"] = req.note
+            if "audio_mode" in req.model_fields_set:
+                fields["audio_mode"] = req.audio_mode
             for field in ("characters_in_segment", "scenes", "props"):
                 if field in req.model_fields_set:
                     fields[field] = [asset_name_comparison_key(value) for value in (getattr(req, field) or [])]

@@ -52,6 +52,7 @@ MESSAGES = {
     # 任务失败原因（GenerationWorker 写入错误码 + 参数，tasks API 读取时按语言渲染）
     "task_fail_provider_unsupported_media": "供应商 {provider_id} 不支持 {media_type} 生成",
     "task_fail_provider_rejected": "供应商拒绝了这次生成请求（HTTP {status}）",
+    "task_fail_provider_generation_failed": "供应商报告了一次生成失败（status={status}）：{provider_message}",
     "task_fail_dispatch_provider_requeue_failed": "任务供应商从 {claimed_provider_id} 变为 {actual_provider_id}，但无法回队重新认领，请重试",
     "task_fail_restart_lost_image": "图片任务在服务重启时中断且无法接续，请手动重试以避免重复计费",
     "task_fail_restart_lost_audio": "配音任务在服务重启时中断且无法接续，请手动重试以避免重复计费",
@@ -302,6 +303,9 @@ MESSAGES = {
     "ref_payload_too_large": "参考图请求体超出供应商限制，已二次压缩重试",
     "ref_payload_floor_exceeded": "参考图过大或过多，压缩到最低画质仍超出供应商请求体上限，请减少参考图数量或降低分辨率后重试",
     "ref_sora_single_ref": "Sora 参考生视频暂不支持多图，已降级为单图",
+    "visual_qa.regenerate_suggested": (
+        "视觉质检建议重新生成：内容 {content}/5，资产一致性 {asset}/5，风格 {style}/5，受众适配 {audience}/5。{notes}"
+    ),
     "ref_episode_not_found": "第 {episode} 集不存在",
     "ref_not_reference_video_mode": "该集脚本不是参考生视频",
     "ref_unit_not_found": "视频单元「{unit_id}」不存在",

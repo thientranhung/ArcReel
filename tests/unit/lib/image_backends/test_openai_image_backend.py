@@ -16,7 +16,7 @@ from lib.image_backends.base import (
     ReferenceImage,
 )
 from lib.providers import PROVIDER_OPENAI
-from tests.fakes import captured_openai_clients
+from tests.fakes import bounded_poll_clock, captured_openai_clients
 from tests.http_capture import capture_http, only_request
 
 
@@ -471,6 +471,98 @@ class TestOpenAIImageBackend:
         assert result.text_input_tokens == 200
         assert result.image_output_tokens == 2200
         assert result.text_output_tokens == 0
+
+
+class TestGenerateSubmitRetryBehavior:
+    """`generate`（非幂等「创建 + 计费」调用）的重试判据测试，覆盖 T2I 与 I2I 两条路径。"""
+
+    async def test_t2i_post_send_timeout_does_not_retry(self, tmp_path: Path):
+        """T2I：images.generate 发出后超时（可能已送达并计费）应终态失败，不自动重试。"""
+        from openai import APITimeoutError
+
+        from lib.video_backends.base import AmbiguousSubmitError
+
+        error = APITimeoutError(request=httpx.Request("POST", "https://api.openai.com/v1/images/generations"))
+        mock_client = AsyncMock()
+        mock_client.images.generate = AsyncMock(side_effect=error)
+
+        with captured_openai_clients(mock_client):
+            from lib.image_backends.openai import OpenAIImageBackend
+
+            backend = OpenAIImageBackend(api_key="test-key")
+            request = ImageGenerationRequest(prompt="test", output_path=tmp_path / "out.png")
+            with pytest.raises(AmbiguousSubmitError):
+                await backend.generate(request)
+
+        assert mock_client.images.generate.call_count == 1
+
+    async def test_i2i_post_send_timeout_does_not_retry(self, tmp_path: Path):
+        """I2I：images.edit 发出后超时（可能已送达并计费）应终态失败，不自动重试。"""
+        from openai import APITimeoutError
+
+        from lib.video_backends.base import AmbiguousSubmitError
+
+        error = APITimeoutError(request=httpx.Request("POST", "https://api.openai.com/v1/images/edits"))
+        mock_client = AsyncMock()
+        mock_client.images.edit = AsyncMock(side_effect=error)
+
+        ref_path = tmp_path / "ref.png"
+        ref_path.write_bytes(b"fake-ref-data")
+
+        with captured_openai_clients(mock_client):
+            from lib.image_backends.openai import OpenAIImageBackend
+
+            backend = OpenAIImageBackend(api_key="test-key")
+            request = ImageGenerationRequest(
+                prompt="test",
+                output_path=tmp_path / "out.png",
+                reference_images=[ReferenceImage(path=str(ref_path))],
+            )
+            with pytest.raises(AmbiguousSubmitError):
+                await backend.generate(request)
+
+        assert mock_client.images.edit.call_count == 1
+
+    async def test_t2i_retries_on_retryable_status_error(self, tmp_path: Path):
+        """T2I：服务端已明确响应的 5xx（InternalServerError）应重试。"""
+        from openai import InternalServerError
+
+        error = InternalServerError(
+            message="internal error",
+            response=MagicMock(status_code=500, headers={}),
+            body=None,
+        )
+        b64_data = base64.b64encode(b"fake-png-data").decode()
+        mock_client = AsyncMock()
+        mock_client.images.generate = AsyncMock(side_effect=[error, _make_mock_image_response(b64_data)])
+
+        with captured_openai_clients(mock_client), bounded_poll_clock():
+            from lib.image_backends.openai import OpenAIImageBackend
+
+            backend = OpenAIImageBackend(api_key="test-key")
+            output_path = tmp_path / "out.png"
+            request = ImageGenerationRequest(prompt="test", output_path=output_path)
+            result = await backend.generate(request)
+
+        assert result.image_path == output_path
+        assert mock_client.images.generate.call_count == 2
+
+    async def test_t2i_success_path_unchanged(self, tmp_path: Path):
+        """T2I 成功路径（无重试）行为不变。"""
+        b64_data = base64.b64encode(b"fake-png-data").decode()
+        mock_client = AsyncMock()
+        mock_client.images.generate = AsyncMock(return_value=_make_mock_image_response(b64_data))
+
+        with captured_openai_clients(mock_client):
+            from lib.image_backends.openai import OpenAIImageBackend
+
+            backend = OpenAIImageBackend(api_key="test-key")
+            output_path = tmp_path / "out.png"
+            request = ImageGenerationRequest(prompt="test", output_path=output_path)
+            result = await backend.generate(request)
+
+        assert result.image_path == output_path
+        assert mock_client.images.generate.call_count == 1
 
 
 class TestModeCapabilities:

@@ -21,9 +21,11 @@ from lib.json_io import atomic_write_bytes, atomic_write_json
 from lib.narration_delivery import (
     POST_PRODUCTION,
     USE_TTS,
+    SceneAudioMode,
     TtsSettingsResolver,
     TtsSynthesisSettings,
     build_narration_audio_basis,
+    resolve_scene_audio_mode,
 )
 from lib.path_safety import safe_join
 from lib.project_manager import ProjectManager
@@ -53,6 +55,19 @@ from server.services.video_artifact_currency import build_current_video_artifact
 DurationProbe = Callable[[Path], Awaitable[float | None]]
 ContentDigest = Callable[[Path], str]
 SettingsResolverFactory = Callable[[str, Path], TtsSettingsResolver]
+
+
+def _scene_audio_mode(item: Mapping[str, Any]) -> SceneAudioMode | None:
+    """Read one script unit's ``audio_mode`` override, ignoring unusable values.
+
+    The field is user/editor-set (``DramaScene.audio_mode`` / ``NarrationSegment.audio_mode``)
+    and validated by the script model on write; this read path stays defensive against
+    on-disk drift instead of trusting it blindly, matching other loose dict reads in
+    this module.
+    """
+
+    raw = item.get("audio_mode")
+    return raw if raw in ("model", "tts") else None
 
 
 class PresentationUnavailableError(ValueError):
@@ -330,7 +345,9 @@ class PresentationReadModelService:
     ) -> MaterializedEpisode:
         """Materialize every selected video in canonical script order.
 
-        The requested rendition applies to narrator units. Character and silent
+        The requested rendition is the project default applied to narrator units;
+        each unit's own ``audio_mode`` (see ``lib.narration_delivery.resolve_scene_audio_mode``)
+        can override it per scene when TTS is actually available. Character and silent
         units have no narrator TTS and therefore retain their post-production
         presentation while preserving the provider track. All units share one
         project/script snapshot; a concurrent canonical edit restarts the batch.
@@ -371,11 +388,21 @@ class PresentationReadModelService:
                 continue
             admission = admit_script_unit(kind, item)
             audio_version = await asyncio.to_thread(versions.get_current_version, "audio", resource_id)
-            effective_variant = (
-                USE_TTS
-                if variant == USE_TTS and admission.mode is SpeechMode.NARRATOR_VOICEOVER and audio_version > 0
-                else POST_PRODUCTION
-            )
+            if admission.mode is SpeechMode.NARRATOR_VOICEOVER:
+                scene_audio_mode = _scene_audio_mode(item)
+                project_default_mode: SceneAudioMode = "tts" if variant == USE_TTS else "model"
+                resolved_mode = resolve_scene_audio_mode(
+                    scene_audio_mode,
+                    project_default_mode,
+                    # Native-audio presence is enforced independently downstream via
+                    # ``provider_audio_enabled``/``gain`` (materialize_speech_presentation);
+                    # this resolver call only needs to pick the TTS-vs-native variant.
+                    has_clip_audio=True,
+                    has_tts=audio_version > 0,
+                )
+                effective_variant = USE_TTS if resolved_mode == "tts" else POST_PRODUCTION
+            else:
+                effective_variant = POST_PRODUCTION
             version_info = await asyncio.to_thread(versions.get_versions, resource_type, resource_id)
             current_version = version_info.get("current_version")
             if type(current_version) is not int or current_version <= 0:

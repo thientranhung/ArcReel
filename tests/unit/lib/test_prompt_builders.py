@@ -26,6 +26,13 @@ class TestCharacterPrompt:
         assert "古风" in prompt
         assert "Cinematic, low-key lighting" in prompt
 
+    def test_guards_pose_expression_props_and_environment(self):
+        prompt = build_character_prompt("姜月茴", "黑发，冷静神态。")
+        assert "中性表情" in prompt
+        assert "中性站姿" in prompt
+        assert "不手持道具" in prompt
+        assert "不出现背景或环境元素" in prompt
+
 
 class TestScenePromptAndPropPrompt:
     def test_prop_includes_supplied_details(self):
@@ -33,12 +40,22 @@ class TestScenePromptAndPropPrompt:
         assert "玉佩" in prompt
         assert "古朴温润" in prompt
 
+    def test_prop_guards_single_centered_no_hands_no_people_no_environment(self):
+        prompt = build_prop_prompt("玉佩", "古朴温润")
+        assert "单个道具居中呈现" in prompt
+        assert "不出现手部、人物或环境背景" in prompt
+
     def test_scene_includes_supplied_details(self):
         prompt = build_scene_prompt("祠堂", "昏暗古朴")
         assert "祠堂" in prompt
         assert "昏暗古朴" in prompt
 
-    def test_empty_prop_guard_does_not_add_a_blank_paragraph(self):
+    def test_scene_guards_no_characters_no_labels_arrows_or_placeholders(self):
+        prompt = build_scene_prompt("祠堂", "昏暗古朴")
+        assert "画面中没有人物出镜" in prompt
+        assert "不出现标签、箭头或占位符文字" in prompt
+
+    def test_prop_guard_does_not_add_a_blank_paragraph(self):
         assert "\n\n\n" not in build_prop_prompt("玉佩", "古朴温润")
 
 

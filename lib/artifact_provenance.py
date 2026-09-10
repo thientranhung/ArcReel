@@ -7,11 +7,16 @@ existing structured artifact.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Literal
 
 from lib.artifact_manifest import ArtifactBasis
-from lib.episode_ledger import episode_outline_context, previous_episode_outline_context
+from lib.episode_ledger import (
+    episode_outline_context,
+    previous_episode_exit_state,
+    previous_episode_outline_context,
+)
+from lib.episode_paths import episode_script_relpath
 from lib.episode_target_duration import project_episode_target_duration
 from lib.project_audience import resolve_project_audience_text
 from lib.speech_rate import project_speech_rate_override, speech_rate_units_per_second
@@ -25,6 +30,34 @@ _DEFAULT_SOURCE_LANGUAGE = "中文"
 _AD_OVERVIEW_FIELDS = ("synopsis", "genre", "theme")
 
 ScriptPlanPromptVariant = Literal["drama", "narration", "reference_video"]
+
+#: 上集已提交剧本的读取器：入参为上集集号（``episode - 1``），返回该集剧本 dict；剧本不存在 /
+#: 未提交时返回 None。取值须为已跑过存量迁移的只读剧本（如
+#: ``ProjectManager.load_script_readonly``），供 :func:`previous_episode_exit_state` 抽取上集
+#: 末场退出态——这是唯一需要磁盘 IO 的 script_plan prompt 输入，因此不像其余输入那样能由
+#: ``project_script_plan_prompt_inputs`` 纯函数自行算出，须由调用方注入读取器。
+PreviousScriptLoader = Callable[[int], dict[str, object] | None]
+
+
+def previous_episode_script_relpath(project: Mapping[str, object], previous_episode: int) -> str:
+    """上集剧本相对项目根路径：单一真相源，供每条读取上集剧本的调用方共用同一份解析结果。
+
+    优先取分集账本登记的 ``script_file``（用户可能改过默认落点）；条目缺失该字段（旧式条目）
+    或整个账本条目都不存在时回退规范路径 ``lib.episode_paths.episode_script_relpath``。
+    ``lib.artifact_planner``（基线预检）与 ``server.text_generation``（生成 / 草稿读时重判）
+    都经本函数解析，确保同一上集剧本身份在两条路径上一致——否则两边算出的 basis 会各自认一份
+    不同的「上集剧本」，即便都启用了退出态也可能对不上号。
+    """
+
+    episodes = project.get("episodes")
+    if isinstance(episodes, list):
+        for entry in episodes:
+            if isinstance(entry, Mapping) and entry.get("episode") == previous_episode:
+                script_file = entry.get("script_file")
+                if isinstance(script_file, str) and script_file:
+                    return script_file
+                break
+    return episode_script_relpath(previous_episode)
 
 
 def decode_script_plan_source(raw: bytes) -> str:
@@ -45,11 +78,16 @@ def build_script_plan_basis(
     *,
     episode: int,
     project: Mapping[str, object],
+    previous_script_loader: PreviousScriptLoader | None = None,
 ) -> ArtifactBasis:
     """Describe every durable prompt input consumed by one script_plan artifact."""
 
     content_mode, generation_mode = _content_axes(project)
-    prompt_inputs = project_script_plan_prompt_inputs(episode, project=project)
+    prompt_inputs = project_script_plan_prompt_inputs(
+        episode,
+        project=project,
+        previous_script_loader=previous_script_loader,
+    )
     return _build_script_plan_basis(
         source_content,
         content_mode=content_mode,
@@ -64,6 +102,7 @@ def build_script_plan_request(
     episode: int,
     project: Mapping[str, object],
     expected_variant: ScriptPlanPromptVariant,
+    previous_script_loader: PreviousScriptLoader | None = None,
 ) -> tuple[dict[str, object], ArtifactBasis]:
     """Freeze the prompt projection and basis for one route-specific script_plan request."""
 
@@ -72,6 +111,7 @@ def build_script_plan_request(
         episode,
         project=project,
         expected_variant=expected_variant,
+        previous_script_loader=previous_script_loader,
     )
     basis = _build_script_plan_basis(
         source_content,
@@ -113,12 +153,17 @@ def project_script_plan_prompt_inputs(
     *,
     project: Mapping[str, object],
     expected_variant: ScriptPlanPromptVariant | None = None,
+    previous_script_loader: PreviousScriptLoader | None = None,
 ) -> dict[str, object]:
     """Project persisted fields passed to the selected script_plan prompt builder.
 
     Capability tiers and one-shot instructions are execution inputs and stay out
     of this projection. Asset mappings preserve insertion order because all
     three prompt builders render that order verbatim.
+
+    ``previous_script_loader``（drama 变体，第二集起）供 :func:`lib.episode_ledger.
+    previous_episode_exit_state` 抽取上集末场的退出态：本函数本身不做磁盘 IO，缺省时该输入
+    静默省略（与「无上集」同效——不影响其余输入的投影）。
     """
 
     if type(episode) is not int or episode < 1:
@@ -161,6 +206,14 @@ def project_script_plan_prompt_inputs(
         previous_episode_outline = previous_episode_outline_context(project, episode)
         if previous_episode_outline is not None:
             inputs["previous_episode_outline"] = previous_episode_outline
+
+    if variant == "drama" and episode > 1 and previous_script_loader is not None:
+        # 退出态是事实性快照（见 previous_episode_exit_state docstring），只在存在时进 basis——
+        # 首集、上集未提交剧本、或上集末场字段皆空时提示词逐字不变，与 previous_episode_outline
+        # 同一「未设不进 basis」口径。
+        exit_state = previous_episode_exit_state(previous_script_loader(episode - 1))
+        if exit_state is not None:
+            inputs["previous_episode_exit_state"] = exit_state
 
     if variant in {"reference_video", "drama"}:
         raw_source_language = project.get("source_language")
@@ -229,6 +282,13 @@ def _freeze_script_plan_prompt_inputs(
                 prompt_inputs.get("previous_episode_outline")
             )
 
+    if "previous_episode_exit_state" in frozen:
+        frozen_exit_state = _freeze_previous_episode_exit_state(frozen["previous_episode_exit_state"])
+        if frozen_exit_state is None:
+            frozen.pop("previous_episode_exit_state", None)
+        else:
+            frozen["previous_episode_exit_state"] = frozen_exit_state
+
     # 未设单集目标时长时该键不进 basis：此时提示词与不带该参数时逐字相同，把 None 写进
     # digest 会让每个从未用过该设置的存量项目的脚本规划与剧本产物一并判 stale。设了目标
     # 才进 basis——那时提示词确实变了，冻结的基线就该失效。
@@ -256,6 +316,41 @@ def _freeze_reference_outline(value: object) -> dict[str, object] | None:
         beats = [beat for beat in raw_beats if isinstance(beat, str) and beat.strip()]
         if beats:
             result["story_beats"] = beats
+    return result or None
+
+
+def _freeze_previous_episode_exit_state(value: object) -> dict[str, object] | None:
+    """Trim whitespace / drop empties the same way :func:`_freeze_reference_outline` does.
+
+    上集末场退出态是事实性快照，改动上集剧本末场即让本集 script_plan 判 stale——这是有意为之
+    （见 ``lib.episode_ledger.previous_episode_exit_state`` docstring），本函数只负责去掉不影响
+    渲染结果的空白差异，不改变「上集末场变了就该 stale」这条判据。
+    """
+
+    if not isinstance(value, Mapping):
+        return None
+    result: dict[str, object] = {}
+    raw_scene_id = value.get("scene_id")
+    if isinstance(raw_scene_id, str) and raw_scene_id.strip():
+        result["scene_id"] = raw_scene_id.strip()
+    for field in ("location", "characters_present", "props"):
+        raw_list = value.get(field)
+        if isinstance(raw_list, list):
+            items = [item.strip() for item in raw_list if isinstance(item, str) and item.strip()]
+            if items:
+                result[field] = items
+    raw_last_action = value.get("last_action")
+    if isinstance(raw_last_action, str) and raw_last_action.strip():
+        result["last_action"] = raw_last_action.strip()
+    raw_last_utterance = value.get("last_utterance")
+    if isinstance(raw_last_utterance, Mapping):
+        text = raw_last_utterance.get("text")
+        if isinstance(text, str) and text.strip():
+            speaker = raw_last_utterance.get("speaker")
+            result["last_utterance"] = {
+                "speaker": speaker.strip() if isinstance(speaker, str) and speaker.strip() else None,
+                "text": text.strip(),
+            }
     return result or None
 
 

@@ -170,7 +170,7 @@ Phát sinh từ đợt 0 (chưa làm, xếp vào đợt 2 mục 11):
 12. Codex visual QA thành bước chính thức trong pipeline: chấm content/asset/style/audience, auto regenerate tối đa N lần, ngưỡng tự động và ngưỡng hỏi người.
 13. Tự viết lại prompt khi moderation từ chối, retry có giới hạn, log lý do.
 14. Cờ `audio_embedded` cấp scene với rule fallback cho bước stitch.
-15. Schema `default_voice` + `emotion_voices` cho nhân vật; thử stable voice qua `reference_audio` Seedance trên 2-3 shot, đo drift; ổn mới xét TTS thoại nhân vật và lip-sync.
+15. ~~Schema voice cho nhân vật~~ **đã có sẵn** (`reference_audio` + `voice_style` + `character_voice_binding`, Ark/Dashscope đã gửi reference audio; xem so sánh zjt §9). Còn lại: `emotion_voices` (tùy chọn) và MCP tool gán mẫu giọng. Thử nghiệm stable voice cần dữ liệu thoại mới trên Bible story → chuyển sang đợt 4.
 
 ### Đợt 4 (để sau, chưa duyệt)
 16. Sản xuất tập 3-10 Bible story với pipeline mới, mốc chi phí < $10/tập.

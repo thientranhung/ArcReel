@@ -30,6 +30,7 @@ from lib.narration_delivery import (
     prepare_narrated_video_output,
     prepare_narration_delivery,
     register_narration_audio_transactionally,
+    resolve_scene_audio_mode,
     resolve_tts_synthesis_settings,
 )
 from lib.speech_composition import (
@@ -694,3 +695,99 @@ def test_generated_video_equal_to_tts_duration_is_accepted_without_speedup() -> 
     )
 
     assert prepare_narrated_video_output(request, actual_duration_seconds=6.2) is request
+
+
+# ============ resolve_scene_audio_mode：分镜声音归属回退裁决 ============
+
+
+@pytest.mark.parametrize(
+    ("scene_mode", "project_default", "has_clip_audio", "has_tts", "expected"),
+    [
+        # 未覆盖：沿用项目默认（其余轴同「effective_mode = project_default」桶）
+        (None, "model", True, True, "model"),
+        (None, "model", True, False, "model"),
+        (None, "model", False, True, "none"),
+        (None, "model", False, False, "none"),
+        (None, "tts", True, True, "tts"),
+        (None, "tts", True, False, "model"),
+        (None, "tts", False, True, "tts"),
+        (None, "tts", False, False, "none"),
+        # 显式 model：不管项目默认是什么，恒走原生声轨（受限于片段是否有音轨）
+        ("model", "model", True, True, "model"),
+        ("model", "model", True, False, "model"),
+        ("model", "model", False, True, "none"),
+        ("model", "model", False, False, "none"),
+        ("model", "tts", True, True, "model"),
+        ("model", "tts", True, False, "model"),
+        ("model", "tts", False, True, "none"),
+        ("model", "tts", False, False, "none"),
+        # 显式 tts：有旁白配音才用旁白，否则回退原生声轨（永不产出静音分镜）
+        ("tts", "model", True, True, "tts"),
+        ("tts", "model", True, False, "model"),
+        ("tts", "model", False, True, "tts"),
+        ("tts", "model", False, False, "none"),
+        ("tts", "tts", True, True, "tts"),
+        ("tts", "tts", True, False, "model"),
+        ("tts", "tts", False, True, "tts"),
+        ("tts", "tts", False, False, "none"),
+    ],
+)
+def test_resolve_scene_audio_mode_truth_table(
+    scene_mode: str | None,
+    project_default: str,
+    has_clip_audio: bool,
+    has_tts: bool,
+    expected: str,
+) -> None:
+    assert (
+        resolve_scene_audio_mode(
+            scene_mode,  # type: ignore[arg-type]
+            project_default,  # type: ignore[arg-type]
+            has_clip_audio=has_clip_audio,
+            has_tts=has_tts,
+        )
+        == expected
+    )
+
+
+def test_resolve_scene_audio_mode_never_silent_when_tts_mode_falls_back_to_available_native() -> None:
+    """ "tts" (explicit or via project default) never drops to silence while native audio exists."""
+
+    for scene_mode in (None, "tts"):
+        for project_default in ("model", "tts"):
+            effective = scene_mode or project_default
+            if effective != "tts":
+                continue
+            for has_tts in (True, False):
+                resolved = resolve_scene_audio_mode(
+                    scene_mode,  # type: ignore[arg-type]
+                    project_default,  # type: ignore[arg-type]
+                    has_clip_audio=True,
+                    has_tts=has_tts,
+                )
+                assert resolved != "none"
+
+
+def test_resolve_scene_audio_mode_is_silent_only_when_no_source_is_selected() -> None:
+    """ "model" effective mode (explicit or fallback) ignores any available TTS and needs the clip's own audio."""
+
+    assert resolve_scene_audio_mode("model", "tts", has_clip_audio=False, has_tts=True) == "none"
+    assert resolve_scene_audio_mode(None, "model", has_clip_audio=False, has_tts=True) == "none"
+    assert resolve_scene_audio_mode("tts", "tts", has_clip_audio=False, has_tts=False) == "none"
+
+
+def test_resolve_scene_audio_mode_rejects_unsupported_literal() -> None:
+    with pytest.raises(AssertionError):
+        resolve_scene_audio_mode(
+            "bogus",  # type: ignore[arg-type]
+            "model",
+            has_clip_audio=True,
+            has_tts=True,
+        )
+    with pytest.raises(AssertionError):
+        resolve_scene_audio_mode(
+            None,
+            "bogus",  # type: ignore[arg-type]
+            has_clip_audio=True,
+            has_tts=True,
+        )

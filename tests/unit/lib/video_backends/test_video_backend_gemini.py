@@ -298,14 +298,36 @@ class TestGeminiRetryBehavior:
         # 轮询调用了两次（一次失败 + 一次成功）
         assert gemini_backend._client.aio.operations.get.await_count == 2
 
-    async def test_create_retries_on_transient_error(self, gemini_backend, tmp_path):
-        """任务创建阶段的瞬态错误应由 @with_retry_async 重试。"""
+    async def test_create_ambiguous_read_timeout_does_not_retry(self, gemini_backend, tmp_path):
+        """任务创建阶段发出后的读超时（请求可能已送达并计费）不应自动重试。
+
+        google-genai SDK 默认不做内部重试，原样透传底层 httpx 异常：ReadTimeout 发生在请求
+        已发出之后，无法证明供应商未收到，应终态失败为 AmbiguousSubmitError，create 只调用
+        一次，不重复建任务、不重复计费。
+        """
+        import httpx
+
+        from lib.video_backends.base import AmbiguousSubmitError
+
+        output = tmp_path / "out.mp4"
+        gemini_backend._client.aio.models.generate_videos = AsyncMock(side_effect=httpx.ReadTimeout("read timed out"))
+
+        request = VideoGenerationRequest(prompt="test", output_path=output)
+        with pytest.raises(AmbiguousSubmitError), bounded_poll_clock():
+            await gemini_backend.generate(request)
+
+        gemini_backend._client.aio.models.generate_videos.assert_awaited_once()
+
+    async def test_create_retries_on_pre_send_connect_error(self, gemini_backend, tmp_path):
+        """任务创建阶段连接建立失败（请求确定未送达）应重试，不落歧义态。"""
+        import httpx
+
         output = tmp_path / "out.mp4"
 
         done_op = _make_done_operation()
-        # 第一次创建抛 ConnectionError，第二次成功
+        # 第一次创建抛 ConnectError（连接建立失败，未送达），第二次成功
         gemini_backend._client.aio.models.generate_videos = AsyncMock(
-            side_effect=[ConnectionError("connection reset"), done_op]
+            side_effect=[httpx.ConnectError("connection refused"), done_op]
         )
 
         request = VideoGenerationRequest(prompt="test", output_path=output)
@@ -315,7 +337,7 @@ class TestGeminiRetryBehavior:
             result = await gemini_backend.generate(request)
 
         assert result.provider == "gemini"
-        # 创建调用了两次（一次失败 + 一次成功）
+        # 创建调用了两次（一次连接失败 + 一次成功）
         assert gemini_backend._client.aio.models.generate_videos.await_count == 2
 
     async def test_poll_non_retryable_error_propagates(self, gemini_backend, tmp_path):

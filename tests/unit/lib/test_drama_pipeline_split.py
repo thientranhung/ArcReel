@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from lib.episode_ledger import episode_outline_context, previous_episode_outline_context
+from lib.episode_ledger import episode_outline_context, previous_episode_exit_state, previous_episode_outline_context
 from lib.script_models import (
     DramaEpisodeScript,
     DramaNormalizedScript,
@@ -286,3 +286,157 @@ class TestEpisodeOutlineContext:
         # 首集没有上集；上集是旧式条目（无规划数据）时同样为 None，提示词不渲染上集块
         assert previous_episode_outline_context(self._project(), 1) is None
         assert previous_episode_outline_context(self._project(), 3) is None
+
+
+class TestPreviousEpisodeExitState:
+    """上集末场退出态（事实性快照）供本集 script_plan 设计开场入场态延续。"""
+
+    def test_none_script_returns_none(self):
+        assert previous_episode_exit_state(None) is None
+
+    def test_empty_script_returns_none(self):
+        assert previous_episode_exit_state({}) is None
+
+    def test_empty_scenes_returns_none(self):
+        assert previous_episode_exit_state({"content_mode": "drama", "scenes": []}) is None
+
+    def test_drama_full_case(self):
+        script = {
+            "content_mode": "drama",
+            "scenes": [
+                {"scene_id": "E1S01", "scenes": ["村口"], "characters_in_scene": ["张三"]},
+                {
+                    "scene_id": "E1S02",
+                    "scenes": ["山洞"],
+                    "characters_in_scene": ["张三", "李四"],
+                    "props": ["火把"],
+                    "utterances": [
+                        {"kind": "voiceover", "speaker": None, "text": "夜色渐浓。"},
+                        {"kind": "dialogue", "speaker": "张三", "text": "我们到了。"},
+                    ],
+                    "video_prompt": {
+                        "action": "张三举起火把环顾四周",
+                        "camera_motion": "Static",
+                        "ambiance_audio": "风声",
+                    },
+                },
+            ],
+        }
+        result = previous_episode_exit_state(script)
+        assert result == {
+            "scene_id": "E1S02",
+            "location": ["山洞"],
+            "characters_present": ["张三", "李四"],
+            "props": ["火把"],
+            "last_utterance": {"speaker": "张三", "text": "我们到了。"},
+            "last_action": "张三举起火把环顾四周",
+        }
+
+    def test_drama_without_utterances(self):
+        script = {
+            "content_mode": "drama",
+            "scenes": [
+                {
+                    "scene_id": "E1S01",
+                    "scenes": ["山洞"],
+                    "characters_in_scene": ["张三"],
+                    "props": [],
+                    "utterances": [],
+                    "video_prompt": {
+                        "action": "张三坐下",
+                        "camera_motion": "Static",
+                        "ambiance_audio": "静默",
+                    },
+                },
+            ],
+        }
+        result = previous_episode_exit_state(script)
+        assert result is not None
+        assert result["last_utterance"] is None
+        assert result["last_action"] == "张三坐下"
+
+    def test_drama_text_form_video_prompt_falls_back_to_whole_text(self):
+        script = {
+            "content_mode": "drama",
+            "scenes": [
+                {
+                    "scene_id": "E1S01",
+                    "scenes": ["山洞"],
+                    "characters_in_scene": ["张三"],
+                    "video_prompt": "张三缓缓起身，走向洞口。",
+                },
+            ],
+        }
+        result = previous_episode_exit_state(script)
+        assert result is not None
+        assert result["last_action"] == "张三缓缓起身，走向洞口。"
+
+    def test_drama_pending_video_prompt_yields_no_action(self):
+        script = {
+            "content_mode": "drama",
+            "scenes": [
+                {"scene_id": "E1S01", "scenes": ["山洞"], "characters_in_scene": ["张三"], "video_prompt": None},
+            ],
+        }
+        result = previous_episode_exit_state(script)
+        assert result is not None
+        assert result["last_action"] is None
+
+    def test_narration_case(self):
+        script = {
+            "content_mode": "narration",
+            "segments": [
+                {
+                    "segment_id": "E1S01",
+                    "scenes": ["村口"],
+                    "characters_in_segment": ["张三"],
+                    "novel_text": "黄昏时分。",
+                },
+                {
+                    "segment_id": "E1S02",
+                    "scenes": ["山洞"],
+                    "characters_in_segment": ["张三", "李四"],
+                    "props": ["火把"],
+                    "novel_text": "他们走进山洞。夜色渐浓，火光摇曳。",
+                    "video_prompt": {
+                        "action": "两人举着火把走入洞穴深处",
+                        "camera_motion": "Tracking Shot",
+                        "ambiance_audio": "脚步声",
+                    },
+                },
+            ],
+        }
+        result = previous_episode_exit_state(script)
+        assert result == {
+            "scene_id": "E1S02",
+            "location": ["山洞"],
+            "characters_present": ["张三", "李四"],
+            "props": ["火把"],
+            "last_utterance": {"speaker": None, "text": "夜色渐浓，火光摇曳。"},
+            "last_action": "两人举着火把走入洞穴深处",
+        }
+
+    def test_malformed_legacy_json_does_not_raise(self):
+        # 畸形/存量数据：scenes 非 list、utterances 混入非法项、video_prompt 类型错、
+        # 缺 content_mode，均应 best-effort 兜底而非抛错。
+        assert previous_episode_exit_state("not-a-dict") is None
+        assert previous_episode_exit_state({"scenes": "不是列表"}) is None
+        assert previous_episode_exit_state({"scenes": [None, 42, "也不是字典"]}) is None
+        assert previous_episode_exit_state({"scenes": [{"scene_id": 123, "video_prompt": 999}]}) is None
+        result = previous_episode_exit_state(
+            {
+                # 无 content_mode，但 scenes 是 list → 按 drama 兜底猜测
+                "scenes": [
+                    {
+                        "scene_id": "E1S01",
+                        "scenes": ["村口"],
+                        "characters_in_scene": ["张三"],
+                        "utterances": [{"kind": "dialogue"}],  # 缺 text，容错为 None
+                        "video_prompt": {"camera_motion": "Static"},  # 缺 action
+                    }
+                ]
+            }
+        )
+        assert result is not None
+        assert result["last_utterance"] is None
+        assert result["last_action"] is None

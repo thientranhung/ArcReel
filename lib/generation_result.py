@@ -164,6 +164,10 @@ _TASK_FAILURE_ACTIONS: dict[str, GenerationAction] = {
     "provider_unsupported_media": GenerationAction.CONFIGURE_PROVIDER,
     # 上游按确定性 4xx 拒了这个请求：原样重发只会被同样拒绝，还要再付一次。
     "provider_rejected": GenerationAction.FIX_INPUT,
+    # 轮询判定的供应商侧生成终态失败：默认按「可重试」处理（瞬态生成失败原样重发可能成功），
+    # 分出审核类别时改判 FIX_INPUT（见 _action_for_task_failure）——原样重发只会被同一条
+    # 内容安全策略再拒一次。这里登记的默认值只服务 FAILURE_CODE_KEYS 覆盖率闸门。
+    "provider_generation_failed": GenerationAction.RETRY,
     "declarative_template_render_failed": GenerationAction.CONFIGURE_PROVIDER,
     "declarative_response_extract_failed": GenerationAction.CONFIGURE_PROVIDER,
     # 供应商已出片、只是没取回来：重发同一请求会再建一个付费任务，正确的一步是接续取件。
@@ -616,9 +620,22 @@ def problem_from_task_failure(
     return GenerationProblem(
         code=code,
         detail=error_message or code,
-        action=_TASK_FAILURE_ACTIONS.get(code, GenerationAction.RETRY),
+        action=_action_for_task_failure(code, params),
         params=params,
     )
+
+
+def _action_for_task_failure(code: str, params: dict[str, Any]) -> GenerationAction:
+    """按 code 查表，``provider_generation_failed`` 额外按已分出的审核类别改判。
+
+    没分出类别（``moderation_category`` 缺席）说明这是一次没有结构化审核信号的生成失败
+    ——供应商侧的瞬态故障、限额之类，保留表里登记的默认动作（RETRY）；分出类别说明这条
+    请求触发了确定性的内容安全策略，原样重发只会被同一条策略再拒一次，改判 FIX_INPUT，
+    与 ``provider_rejected`` 的既有判据同口径。
+    """
+    if code == "provider_generation_failed" and params.get("moderation_category"):
+        return GenerationAction.FIX_INPUT
+    return _TASK_FAILURE_ACTIONS.get(code, GenerationAction.RETRY)
 
 
 def enqueue_problem(detail: str | None, *, interrupted: bool = False) -> GenerationProblem:

@@ -18,6 +18,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from lib.api_errors import BadRequestError
 from lib.artifact_activation import ArtifactCurrencyResolver, active_artifact_currency_resolver
 from lib.asset_inventory import (
     AssetInventoryError,
@@ -31,6 +32,7 @@ from lib.asset_inventory import (
 from lib.asset_types import ASSET_SPECS
 from lib.async_thread import run_sync_transaction as _run_sync_transaction
 from lib.character_voice import VALID_CHARACTER_VOICE_BINDINGS
+from lib.config.registry import PROVIDER_REGISTRY
 from lib.config.resolver import ConfigResolver
 from lib.content_digest import prefixed, prefixed_canonical_json_digest
 from lib.db import async_session_factory
@@ -134,6 +136,7 @@ from lib.source_loader import (
     UnsupportedFormatError,
 )
 from lib.source_revision import SourceScope
+from lib.visual_qa import ProjectTextBackendVisualQa, VisualQaResult
 from lib.workflow_plan import WorkflowPlan, WorkflowPlanRequest
 from lib.workflow_state import WorkflowRequestError
 from server.draft_workflow import (
@@ -145,9 +148,17 @@ from server.draft_workflow import (
     PatchDraftRequest,
     PromoteDraftRequest,
 )
+from server.routers._validators import validate_backend_value
 from server.services.prompt_preview import ItemPromptPreview, ScriptItemNotFound, preview_item_prompts
 from server.services.script_plan_conversion import convert_script_plan as run_script_plan_conversion
 from server.services.video_caps import annotate_reference_unit_tiers
+from server.services.visual_qa_service import (
+    VisualQaImageMissing,
+    VisualQaResourceNotFound,
+)
+from server.services.visual_qa_service import (
+    run_visual_qa as run_visual_qa_service,
+)
 from server.services.workflow_planner import WorkflowPlanner
 from server.text_generation import (
     CompensableTextGenerationResult,
@@ -1576,6 +1587,17 @@ async def patch_episode_script(
 
 MAX_INSTRUCTIONS_LEN = 4000
 ASSET_TABLES = tuple(spec.bucket_key for spec in ASSET_SPECS.values())
+# style: 自由文本风格描述,设置页的 StylePicker 只有「内置模版」与「上传参考图」两个入口,
+# 没有直接填自由文本的入口——用户想要长篇自定义风格（如定制 Pixar/DreamWorks 描述块）只能
+# 手改 project.json。写入即与模版/参考图三选一互斥,写入侧比照设置页模版选择的语义自动清掉
+# style_template_id / style_image / style_description（见 mutate_settings），不要求调用方
+# 额外传 style_template_id: null。style_template_id 本身不入白名单：内置模版靠缩略图挑选，
+# 该体验设置页已提供,Agent 更自然的写入路径是自由文本。
+# video_backend / image_provider_t2i / image_provider_i2i: 项目级模型覆盖,值形如
+# provider/model 或裸 provider（回退该 provider 默认模型），校验复用 REST PATCH 同一把尺
+# （server.routers._validators.validate_backend_value）。历史单字段 image_backend 已废弃
+# （lib.project_manager 数据层拒写,ADR 0054 任务类型桶拆分为 t2i/i2i），因此这里只收拆分后的
+# 两个桶字段，不提供 image_backend 别名。
 PROJECT_SETTINGS = (
     EPISODE_TARGET_UNITS_FIELD,
     EPISODE_TARGET_DURATION_FIELD,
@@ -1586,16 +1608,96 @@ PROJECT_SETTINGS = (
     "narration_voice",
     "narration_speed",
     "character_voice_binding",
+    "style",
+    "video_backend",
+    "image_provider_t2i",
+    "image_provider_i2i",
 )
 PROJECT_OVERVIEW_FIELDS = ("synopsis", "genre", "theme", "world_setting")
 EPISODE_META_FIELDS = ("title",)
 
 _SOURCE_LANGUAGE_VALUES = ("zh", "en", "vi")
 _POSITIVE_INT_SETTINGS = (EPISODE_TARGET_UNITS_FIELD, "planning_window_chars", "planning_max_episodes")
+# provider/model 值经 validate_backend_value 校验的 settings 字段；None 清除、回退项目默认/全局层。
+_BACKEND_SETTINGS = ("video_backend", "image_provider_t2i", "image_provider_i2i")
 
 
 class ToolMessage(BaseModel):
     message: str
+
+
+class RunVisualQaRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    resource_type: Literal["character", "scene", "prop", "storyboard", "grid"]
+    ids: list[str] = Field(min_length=1, description="待评审的资源 id 列表")
+    script: str | None = Field(
+        default=None, description="剧本文件名（纯文件名）；resource_type 为 storyboard/grid 时必填"
+    )
+
+    @field_validator("script")
+    @classmethod
+    def _validate_script(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not value or "/" in value or "\\" in value or value in {".", ".."}:
+            raise ValueError(f"script 必须是纯文件名，禁止路径分隔符: {value!r}")
+        return value
+
+    @model_validator(mode="after")
+    def _script_required_for_scripted_kinds(self) -> RunVisualQaRequest:
+        if self.resource_type in ("storyboard", "grid") and self.script is None:
+            raise ValueError(f"resource_type={self.resource_type} 时 script 必填")
+        return self
+
+
+class RunVisualQaResult(ToolMessage):
+    results: dict[str, VisualQaResult]
+    warnings_added: dict[str, dict[str, Any]]
+
+
+async def run_visual_qa(
+    request: ToolRequest[RunVisualQaRequest],
+    scope: ProjectScope,
+    _caller: CallerContext,
+    services: Services,
+) -> ToolOutcome[RunVisualQaResult]:
+    """对一批资源的当前图各跑一次视觉质检评审，写 sidecar 并返回评分与新增 warning。
+
+    只读：评审的是已经生成好的图，不生成新图、不入生成队列、不改产物清单。评审后端解析口径
+    与 ``STYLE_ANALYSIS`` 一致，按项目配置的 ``TextTaskType.VISUAL_QA`` 档位解析文本 backend
+    （见 ``lib.visual_qa.ProjectTextBackendVisualQa``）。
+    """
+    value = request.value
+    try:
+        failure = await asyncio.to_thread(project_migration_failure, scope.project_name, services.projects)
+        if failure is not None:
+            return ToolOutcome(problem=ToolProblem(MIGRATION_FAILURE_CODE, failure.reason))
+        outcome = await run_visual_qa_service(
+            scope.project_name,
+            value.resource_type,
+            value.ids,
+            backend=ProjectTextBackendVisualQa(scope.project_name),
+            script_file=value.script,
+            projects=services.projects,
+        )
+    except VisualQaResourceNotFound as exc:
+        return ToolOutcome(problem=ToolProblem("item_not_found", str(exc)))
+    except VisualQaImageMissing as exc:
+        return ToolOutcome(problem=ToolProblem("image_missing", str(exc)))
+    except FileNotFoundError as exc:
+        return ToolOutcome(problem=ToolProblem("file_not_found", str(exc)))
+    except (TypeError, ValueError) as exc:
+        return ToolOutcome(problem=ToolProblem("invalid_request", str(exc)))
+    except Exception as exc:
+        return ToolOutcome(problem=ToolProblem("internal_error", f"run_visual_qa 失败: {exc}"))
+    return ToolOutcome(
+        value=RunVisualQaResult(
+            message=f"已完成 {len(outcome.results)} 项视觉质检",
+            results=outcome.results,
+            warnings_added=outcome.warnings_added,
+        )
+    )
 
 
 class PlanEpisodesRequest(BaseModel):
@@ -2120,6 +2222,26 @@ def _coerce_setting_value(key: str, value: Any) -> Any:
         if not is_valid:
             raise ValueError(f"narration_speed 必须是正的有限数值或 null,收到 {value!r}")
         return value
+    if key == "style":
+        # 自由文本风格：不接受 null——清空走「取消模版选择」的既有路径（REST PATCH
+        # style_template_id: null），这里只承担「写入自定义文本」这一半。
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"style 必须是非空字符串,收到 {value!r}")
+        return value.strip()
+    if key in _BACKEND_SETTINGS:
+        if value is None:
+            return None
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{key} 必须是 provider/model（或裸 provider）格式的字符串或 null,收到 {value!r}")
+        try:
+            validate_backend_value(value, key)
+        except BadRequestError as exc:
+            valid_ids = sorted(PROVIDER_REGISTRY)
+            raise ValueError(
+                f"{key} 值无效: {value!r}（{exc.key} {exc.params}）。已注册 provider id: {valid_ids}"
+                "（自定义供应商用 custom-<id> 前缀）"
+            ) from exc
+        return value
     raise ValueError(f"settings 字段 {key!r} 缺类型校验")
 
 
@@ -2232,6 +2354,13 @@ def _patch_project_sync(
                     else:
                         diagnostics[key] = ("set", field_value)
                         project_data[key] = field_value
+                        if key == "style":
+                            # 写入自由文本风格与「选中内置模版」/「上传自定义参考图」三选一互斥，
+                            # 语义比照设置页模版选择的既有分支（server/routers/projects.py 的
+                            # style_template_id 写入分支）：选一个就清掉另外两个的痕迹，不留
+                            # style_template_id 指向模版、但 style 文本已不是该模版展开值的孤儿态。
+                            for orphaned in ("style_template_id", "style_image", "style_description"):
+                                project_data.pop(orphaned, None)
 
             services.projects.update_project(scope.project_name, mutate_settings)
             return ToolOutcome(
