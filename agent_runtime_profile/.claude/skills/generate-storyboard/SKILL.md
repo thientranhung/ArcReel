@@ -81,7 +81,7 @@ Composition:
   shot_type: [image_prompt.composition.shot_type]
   lighting: [image_prompt.composition.lighting]
   ambiance: [image_prompt.composition.ambiance]
-Avoid: 水印、多余文字、Logo
+Avoid: 水印、多余文字、Logo、字幕、标题、拼贴、分屏、多余人物、人物直视镜头（除非剧本明确打破第四面墙）
 ```
 
 > 画面比例通过 API 参数设置，不写入 prompt。

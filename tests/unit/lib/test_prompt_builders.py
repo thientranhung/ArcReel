@@ -115,11 +115,20 @@ class TestImageNegativeTail:
 
 class TestNegativeTailsAreAvoidKeys:
     def test_image_and_video_tails_are_avoid_lines(self):
-        assert append_image_negative_tail("") == "Avoid: 水印、多余文字、Logo"
-        assert append_video_negative_tail("") == "Avoid: BGM、文字字幕、水印"
+        assert (
+            append_image_negative_tail("")
+            == "Avoid: 水印、多余文字、Logo、字幕、标题、拼贴、分屏、多余人物、人物直视镜头（除非剧本明确打破第四面墙）"
+        )
+        assert (
+            append_video_negative_tail("")
+            == "Avoid: BGM、水印、多余文字、Logo、字幕、标题、拼贴、分屏、多余人物、人物直视镜头（除非剧本明确打破第四面墙）、镜头之间叠化/交叉溶解/淡入淡出、前后画面透明重叠"
+        )
 
     def test_text_form_appends_one_avoid_line(self):
-        assert append_video_negative_tail("林清缓缓抬头") == "林清缓缓抬头\n\nAvoid: BGM、文字字幕、水印"
+        assert (
+            append_video_negative_tail("林清缓缓抬头")
+            == "林清缓缓抬头\n\nAvoid: BGM、水印、多余文字、Logo、字幕、标题、拼贴、分屏、多余人物、人物直视镜头（除非剧本明确打破第四面墙）、镜头之间叠化/交叉溶解/淡入淡出、前后画面透明重叠"
+        )
 
 
 def _sheet(asset_type: str, name: str) -> VisualReference:
@@ -161,7 +170,7 @@ class TestRenderStoryboardImagePrompt:
             "  shot_type: Medium Shot\n"
             "  lighting: 右侧落地窗逆光，蓝灰色调\n"
             "  ambiance: 雨天，室内昏暗\n"
-            "Avoid: 水印、多余文字、Logo"
+            "Avoid: 水印、多余文字、Logo、字幕、标题、拼贴、分屏、多余人物、人物直视镜头（除非剧本明确打破第四面墙）"
         )
 
     def test_product_images_lead_the_numbering_and_replace_the_fidelity_tail(self):
@@ -209,7 +218,7 @@ class TestRenderStoryboardImagePrompt:
             "Visual style: cinematic\n"
             "Reference_Images: 图1为角色参考图；图2为上一分镜图，只参考构图与色调。\n\n"
             "图1坐在窗边木桌前\n\n"
-            "Avoid: 水印、多余文字、Logo"
+            "Avoid: 水印、多余文字、Logo、字幕、标题、拼贴、分屏、多余人物、人物直视镜头（除非剧本明确打破第四面墙）"
         )
 
     def test_rendering_a_rendered_text_again_is_idempotent(self):

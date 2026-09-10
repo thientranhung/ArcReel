@@ -53,7 +53,10 @@ class TestPromptUtils:
         assert parsed["Style"] == "Anime"
         assert parsed["Scene"] == "夜雨中的街道"
         assert parsed["Composition"]["shot_type"] == "Medium Shot"
-        assert parsed["Avoid"] == "水印、多余文字、Logo"
+        assert (
+            parsed["Avoid"]
+            == "水印、多余文字、Logo、字幕、标题、拼贴、分屏、多余人物、人物直视镜头（除非剧本明确打破第四面墙）"
+        )
 
     def test_long_values_with_ascii_spaces_stay_on_one_line(self):
         scene = "A rain-soaked neon street at night, " * 6 + "a lone figure walks under a red umbrella."
@@ -112,7 +115,10 @@ class TestPromptUtils:
         # 反向约束以 Avoid 键收尾：有对话时置于 Dialogue 之后
         assert list(parsed_a)[-2:] == ["Dialogue", "Avoid"]
         assert list(parsed_b)[-1] == "Avoid"
-        assert parsed_a["Avoid"] == "BGM、文字字幕、水印"
+        assert (
+            parsed_a["Avoid"]
+            == "BGM、水印、多余文字、Logo、字幕、标题、拼贴、分屏、多余人物、人物直视镜头（除非剧本明确打破第四面墙）、镜头之间叠化/交叉溶解/淡入淡出、前后画面透明重叠"
+        )
 
     def test_structured_checks(self):
         assert is_structured_image_prompt({"scene": "x"})

@@ -9,7 +9,10 @@
 `agent_runtime_profile/.claude/references/` 下，子智能体 .md 与本模块读同一个文件。
 `audience_gear` 是按受众
 文本切换的创作规则块（目前只实现儿童 6-10 岁档位），供 drama 的 script_plan（normalize）与
-prompt_authoring 共享。
+prompt_authoring 共享。`shot_continuity` 是 drama / narration / 参考生视频三条 prompt_authoring
+共享的 shot-to-shot 连续性与运镜规则（每分镜内部状态表、参考图只锁身份、表演纪律、运镜、
+台词与声音口径），正文同样存放在 `agent_runtime_profile/.claude/references/` 下，子智能体
+.md 与本模块读同一个文件。
 
 属于"prompt 写作指导"而非可独立维护的规则文本的，写在
 `lib/prompt_builders.py` / `lib/prompt_builders_script.py` 内部，不收进本包。

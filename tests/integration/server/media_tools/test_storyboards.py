@@ -45,7 +45,9 @@ class TestBuildPrompt:
         assert "画风：" not in out
         assert out.startswith("Style: 真人电视剧风格")
         assert "\n\n村口黄昏的长镜头\n\n" in out
-        assert out.endswith("\n\nAvoid: 水印、多余文字、Logo")
+        assert out.endswith(
+            "\n\nAvoid: 水印、多余文字、Logo、字幕、标题、拼贴、分屏、多余人物、人物直视镜头（除非剧本明确打破第四面墙）"
+        )
 
 
 async def test_generate_storyboards_happy(fake_ctx: ToolContext, monkeypatch) -> None:

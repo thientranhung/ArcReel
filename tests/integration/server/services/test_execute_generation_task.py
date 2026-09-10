@@ -76,7 +76,7 @@ class TestGenerationTasks:
             "图5为上一分镜图，只参考构图与色调。\n"
             "Scene: 在雨夜街道\n"
             "Composition:\n  shot_type: Medium Shot\n  lighting: 暖光\n  ambiance: 薄雾\n"
-            "Avoid: 水印、多余文字、Logo"
+            "Avoid: 水印、多余文字、Logo、字幕、标题、拼贴、分屏、多余人物、人物直视镜头（除非剧本明确打破第四面墙）"
         )
 
         await generation_tasks.execute_storyboard_task(

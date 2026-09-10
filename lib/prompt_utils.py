@@ -19,9 +19,17 @@ logger = logging.getLogger(__name__)
 
 #: 反向约束的 YAML 键：分镜图置于 ``Composition`` 之后，视频置于 ``Dialogue`` 之后。
 AVOID_KEY = "Avoid"
-#: 分镜图与视频的反向条目各自定义，内容相同也不合并（同 ``lib.prompt_builders`` 的资产图反向提示词）。
-STORYBOARD_AVOID_ITEMS = "水印、多余文字、Logo"
-VIDEO_AVOID_ITEMS = "BGM、文字字幕、水印"
+#: 分镜图反向条目：移植自 waoowaoo 的「3 句固定约束」
+#: （见 docs/research/learn-from-waoowaoo-2026-09-10.md §1.3）——禁止字幕/标题/水印类文字与
+#: Logo、禁止拼贴/分屏等非单一画面构图、禁止画面中出现分镜内容未要求的多余人物、禁止人物
+#: 直视镜头（打破第四面墙须由剧本明确要求，不能是默认姿态）。
+STORYBOARD_AVOID_ITEMS = (
+    "水印、多余文字、Logo、字幕、标题、拼贴、分屏、多余人物、人物直视镜头（除非剧本明确打破第四面墙）"
+)
+#: 视频反向条目：在分镜图条目基础上叠加 BGM（视频独有）与转场类反向约束——分镜之间只能
+#: 直切，叠化/交叉溶解/淡入淡出与画面透明叠加都会让 shot-to-shot 连续性判断失真。
+#: 与分镜图共用同一份条目文本是刻意的单一真相源：两者内容相同也不拆成独立常量硬编码。
+VIDEO_AVOID_ITEMS = f"BGM、{STORYBOARD_AVOID_ITEMS}、镜头之间叠化/交叉溶解/淡入淡出、前后画面透明重叠"
 
 # 提示词 YAML 的行宽上限。PyYAML 默认 80 列，超宽的纯量会在 ASCII 空格处折成多行——
 # 英文 / 越南语提示词几乎每个值都超 80 列，折行会把原文塞进换行再喂给供应商。取一个任何

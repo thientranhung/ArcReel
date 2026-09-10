@@ -34,7 +34,7 @@ CLAMPED_PROMPT = (
     "Reference_Images: 图1、图2、图3、图4、图5、图6为角色参考图；图7为场景参考图。\n"
     "Scene: 图1握着玉佩立在图7门口\n"
     "Composition:\n  shot_type: Medium Shot\n  lighting: 暖光\n  ambiance: 薄雾\n"
-    "Avoid: 水印、多余文字、Logo"
+    "Avoid: 水印、多余文字、Logo、字幕、标题、拼贴、分屏、多余人物、人物直视镜头（除非剧本明确打破第四面墙）"
 )
 
 

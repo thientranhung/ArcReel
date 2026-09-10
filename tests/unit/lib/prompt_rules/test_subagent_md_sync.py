@@ -7,6 +7,7 @@ import pytest
 from lib.episode_target_duration import EPISODE_TARGET_DURATION_FIELD
 from lib.episode_target_volume import EPISODE_TARGET_UNITS_FIELD
 from lib.prompt_rules.asset_identity_rules import ASSET_IDENTITY_RULES_FILE
+from lib.prompt_rules.shot_continuity import SHOT_CONTINUITY_RULES_FILE
 
 REPO = Path(__file__).resolve().parents[4]
 
@@ -75,3 +76,13 @@ def test_asset_identity_rules_file_is_referenced_by_analyze_assets() -> None:
     md = (REPO / "agent_runtime_profile/.claude/agents/analyze-assets.md").read_text(encoding="utf-8")
 
     assert ASSET_IDENTITY_RULES_FILE in md, f"{ASSET_IDENTITY_RULES_FILE} 未在 analyze-assets.md 中找到（漂移）"
+
+
+def test_shot_continuity_rules_file_is_referenced_by_generate_script_skill() -> None:
+    """generate-script skill 在解释 image_prompt / video_prompt 写作质量前须指向连续性规则正文，
+    不能自行复述一份走样的口径。"""
+    md = (REPO / "agent_runtime_profile/.claude/skills/generate-script/SKILL.md").read_text(encoding="utf-8")
+
+    assert SHOT_CONTINUITY_RULES_FILE in md, (
+        f"{SHOT_CONTINUITY_RULES_FILE} 未在 generate-script/SKILL.md 中找到（漂移）"
+    )

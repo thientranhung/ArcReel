@@ -11,6 +11,7 @@ from lib.prompt_builders_script import (
     render_drama_content_for_prompt_authoring,
 )
 from lib.prompt_rules.episode_pacing import render_pacing_section
+from lib.prompt_rules.shot_continuity import render_shot_continuity_rules
 from lib.speech_rate import speech_rate_units_per_second
 
 
@@ -631,6 +632,12 @@ class TestPromptAuthoringPromptGuards:
 
     def test_narration_prompt_injects_pacing(self):
         assert self._squash(render_pacing_section("narration")) in self._squash(self._narration_prompt())
+
+    def test_drama_prompt_injects_shot_continuity_rules(self):
+        assert self._squash(render_shot_continuity_rules()) in self._squash(self._drama_prompt())
+
+    def test_narration_prompt_injects_shot_continuity_rules(self):
+        assert self._squash(render_shot_continuity_rules()) in self._squash(self._narration_prompt())
 
     def test_drama_no_enum_dump_in_prompt(self):
         """schema 已声明的枚举不再在 prompt 中重复列举（节省 token + 防漂移）。"""
