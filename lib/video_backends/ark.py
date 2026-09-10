@@ -16,6 +16,7 @@ from lib.providers import PROVIDER_ARK
 from lib.retry import with_retry_async
 from lib.video_backends.base import (
     AmbiguousSubmitError,
+    ProviderGenerationFailedError,
     ProviderJobIdPersistenceMixin,
     ReferenceAudioMode,
     ResumeExpiredError,
@@ -472,11 +473,7 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
         result = await poll_with_retry(
             poll_fn=lambda: asyncio.to_thread(self._client.content_generation.tasks.get, task_id=task_id),
             is_done=lambda r: r.status == "succeeded",
-            is_failed=lambda r: (
-                f"Ark 视频生成失败(status={r.status}): {getattr(r, 'error', None) or 'Unknown error'}"
-                if r.status in ("failed", "expired")
-                else None
-            ),
+            is_failed=lambda r: _ark_generation_failure(r) if r.status in ("failed", "expired") else None,
             max_wait=request.poll_timeout_seconds,
             label="Ark",
             on_progress=lambda r, elapsed: logger.info(
@@ -505,6 +502,33 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
             task_id=task_id,
             generate_audio=request.generate_audio,
         )
+
+
+def _ark_generation_failure(r: Any) -> ProviderGenerationFailedError:
+    """把 Ark 轮询终态失败响应包成结构化异常，原文与机器码分列存放。
+
+    Ark SDK 的 ``ContentGenerationError`` 有 ``code`` / ``message`` 两个字段（见
+    ``volcenginesdkarkruntime.types.content_generation.content_generation_task``），但轮询
+    响应上的 ``error`` 字段在旧路径/测试替身里也可能只是一段裸字符串——两种形态都要兜住，
+    取不到结构化 ``code`` 时退回 ``None``，``message`` 退回 ``str(error)``。
+    """
+    error = getattr(r, "error", None)
+    code = getattr(error, "code", None)
+    message = getattr(error, "message", None)
+    provider_code = code.strip() if isinstance(code, str) and code.strip() else None
+    if isinstance(message, str) and message.strip():
+        provider_message = message.strip()
+    elif error is not None:
+        provider_message = str(error)
+    else:
+        provider_message = "Unknown error"
+    return ProviderGenerationFailedError(
+        provider=PROVIDER_ARK,
+        label="Ark",
+        status=r.status,
+        provider_code=provider_code,
+        provider_message=provider_message,
+    )
 
 
 def _is_ark_not_found(exc: BaseException) -> bool:
