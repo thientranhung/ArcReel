@@ -57,12 +57,34 @@ class TestKidsAudienceCueLanguages:
             "6-10 岁",
             "6–10 岁",
             "6 đến 10 tuổi",
+            "ages 6-10",
+            "age: 6-10",
+            "6 to 10 years old",
+            "6-10 year-olds",
         ],
     )
-    def test_age_range_cue_renders_block_without_keyword(self, audience: str):
+    def test_age_range_with_marker_renders_block_without_keyword(self, audience: str):
         block = render_audience_section(audience)
         assert block != ""
         assert "面向儿童" in block
+
+
+class TestBareAgeRangeWithoutMarker:
+    """年龄区间必须紧邻标记词（岁 / tuổi / years / ages 等）才算数：overview 里常见的集数 /
+    章节号数字区间（与年龄无关）不该被误判成儿童受众。"""
+
+    @pytest.mark.parametrize(
+        "audience",
+        [
+            "第 3-9 章",
+            "tập 6-10",
+            "chapters 5-8",
+            "6-10 集",
+            "第 6-10 回",
+        ],
+    )
+    def test_bare_range_without_age_marker_returns_empty_string(self, audience: str):
+        assert render_audience_section(audience) == ""
 
 
 class TestKidsGearContent:
