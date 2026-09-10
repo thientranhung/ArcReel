@@ -213,6 +213,25 @@ _NON_RETRYABLE_LOCAL_ERRORS: tuple[type[Exception], ...] = (
 )
 
 
+def is_pre_send_transport_error(exc: Exception) -> bool:
+    """判断异常是否属于「请求确定未送达」阶段的 httpx 传输错误（连接建立失败等）。
+
+    供不直接调用 ``submit_post``、而是自行处理 SDK 抛出的原始 httpx 异常的 backend
+    （如 gemini：google-genai SDK 默认不重试、原样透传底层 httpx 异常）复用同一套
+    「连接建立失败可重试，读/写阶段及之后归歧义态」判据，避免各自重复维护一份传输错误分类。
+    """
+    return isinstance(exc, _NOT_SENT_TRANSPORT_ERRORS)
+
+
+def is_non_retryable_local_error(exc: Exception) -> bool:
+    """判断异常是否为请求发出前就确定失败的本地/协议错误（无计费风险，但重试无意义）。
+
+    与 :func:`is_pre_send_transport_error` 配套：命中此判据的异常应原样抛出，既不重试
+    也不套「请求可能已送达」的歧义态包装。
+    """
+    return isinstance(exc, _NON_RETRYABLE_LOCAL_ERRORS)
+
+
 class AmbiguousSubmitError(RuntimeError):
     """create/submit（非幂等的「创建 + 计费」）阶段的歧义态失败。
 

@@ -369,15 +369,41 @@ class TestArkRetryBehavior:
         # 轮询调用了两次（一次失败 + 一次成功）
         assert ark_backend._client.content_generation.tasks.get.call_count == 2
 
-    async def test_create_retries_on_transient_error(self, ark_backend, tmp_path):
-        """任务创建阶段的瞬态错误应由 @with_retry_async 重试。"""
+    async def test_create_ambiguous_transport_error_does_not_retry(self, ark_backend, tmp_path):
+        """任务创建阶段的歧义态传输错误（SDK 不透传底层 httpx 异常，无法证明未送达）不应自动重试。
+
+        volcenginesdkarkruntime 把 ReadTimeout / 连接中途断开等一律折叠成不带 status_code
+        的异常（ArkAPIConnectionError / ArkAPITimeoutError），本用例用不带 status_code 的
+        ConnectionError 模拟该形态：应终态失败为 AmbiguousSubmitError，create 只调用一次，
+        不重复建任务、不重复计费。
+        """
+        from lib.video_backends.base import AmbiguousSubmitError
+
         output = tmp_path / "out.mp4"
+        ark_backend._client.content_generation.tasks.create = MagicMock(side_effect=ConnectionError("connection reset"))
+
+        request = VideoGenerationRequest(prompt="test", output_path=output)
+        with pytest.raises(AmbiguousSubmitError), bounded_poll_clock():
+            await ark_backend.generate(request)
+
+        assert ark_backend._client.content_generation.tasks.create.call_count == 1
+
+    async def test_create_retries_on_retryable_status_error(self, ark_backend, tmp_path):
+        """任务创建阶段带明确 status_code 的服务端响应（如 5xx）应按 status_code 重试。"""
+        output = tmp_path / "out.mp4"
+
+        class _FakeArkStatusError(Exception):
+            """duck-typing 模拟 ArkAPIStatusError：带 status_code 属性即视为服务端已响应。"""
+
+            def __init__(self, status_code: int):
+                super().__init__(f"status {status_code}")
+                self.status_code = status_code
 
         create_result = MagicMock()
         create_result.id = "cgt-create-retry"
-        # 第一次创建抛 ConnectionError，第二次成功
+        # 第一次创建抛 5xx（服务端已明确响应，非歧义态），第二次成功
         ark_backend._client.content_generation.tasks.create = MagicMock(
-            side_effect=[ConnectionError("connection reset"), create_result]
+            side_effect=[_FakeArkStatusError(500), create_result]
         )
 
         get_result = MagicMock()
@@ -399,7 +425,7 @@ class TestArkRetryBehavior:
             patcher.stop()
 
         assert result.task_id == "cgt-create-retry"
-        # 创建调用了两次（一次失败 + 一次成功）
+        # 创建调用了两次（一次 5xx + 一次成功）
         assert ark_backend._client.content_generation.tasks.create.call_count == 2
 
     async def test_poll_non_retryable_error_propagates(self, ark_backend, tmp_path):

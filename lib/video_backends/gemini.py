@@ -8,6 +8,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import httpx
 from PIL import Image
 
 from lib.config.registry import model_info_for
@@ -18,6 +19,7 @@ from lib.providers import PROVIDER_GEMINI
 from lib.retry import with_retry_async
 from lib.system_config import resolve_vertex_credentials_path
 from lib.video_backends.base import (
+    AmbiguousSubmitError,
     ProviderJobIdPersistenceMixin,
     ResumeExpiredError,
     VideoAudioMode,
@@ -25,6 +27,9 @@ from lib.video_backends.base import (
     VideoCapabilityError,
     VideoGenerationRequest,
     VideoGenerationResult,
+    is_non_retryable_local_error,
+    is_pre_send_transport_error,
+    is_retryable_http_status,
     poll_with_retry,
     with_artifact_retry,
 )
@@ -38,6 +43,25 @@ logger = logging.getLogger(__name__)
 # 独立触发，与首帧/尾帧无关。
 _REQUIRED_DURATION_SECONDS = 8
 _DURATION_CONSTRAINED_RESOLUTIONS = frozenset({"1080p", "4k"})
+
+
+def _should_retry_gemini_submit(exc: Exception) -> bool:
+    """`_create_task`（非幂等「创建 + 计费」调用）重试谓词，判据与 ``should_retry_submit`` 同口径。
+
+    google-genai SDK 默认不做内部重试（``http_options.retry_options`` 未设时 tenacity
+    ``stop_after_attempt(1)``），失败以原始 httpx 异常或 ``google.genai.errors.APIError``
+    透传，未经额外包装——与 ``submit_post`` 处理的 httpx.RequestError 同源，故直接复用
+    ``is_pre_send_transport_error`` 判据：只有连接建立失败（请求确定未送达）才重试；
+    ReadTimeout 等「请求可能已送达」的传输错误已在 ``_create_task`` 内转成
+    ``AmbiguousSubmitError`` 终态失败，走不到本谓词。``APIError`` 带明确 HTTP 状态码
+    （服务端已响应，非歧义态），按 ``is_retryable_http_status`` 分流。
+    """
+    from google.genai import errors as genai_errors
+
+    if isinstance(exc, genai_errors.APIError):
+        return is_retryable_http_status(exc.code, retry_not_found=False)
+    return is_pre_send_transport_error(exc)
+
 
 # 请求里带得动音轨开关的 Veo 型号（即 Vertex 目录）：`_create_task` 只在 backend_type == "vertex"
 # 时下发 generate_audio，AI Studio 的请求没有这个字段。两家目录的 model 命名不重叠，一致性由
@@ -212,9 +236,9 @@ class GeminiVideoBackend(ProviderJobIdPersistenceMixin):
                 supported=_format_durations(allowed),
             )
 
-    @with_retry_async()
+    @with_retry_async(retry_if=_should_retry_gemini_submit)
     async def _create_task(self, request: VideoGenerationRequest) -> Any:
-        """创建 Gemini 视频生成任务（带重试保护）。"""
+        """创建 Gemini 视频生成任务（非幂等「创建 + 计费」调用，重试判据见 ``_should_retry_gemini_submit``）。"""
         # 1. 限流
         if self._rate_limiter:
             await self._rate_limiter.acquire_async(self._video_model)
@@ -273,7 +297,17 @@ class GeminiVideoBackend(ProviderJobIdPersistenceMixin):
                 }
             ),
         )
-        operation = await self._client.aio.models.generate_videos(model=self._video_model, source=source, config=config)
+        try:
+            operation = await self._client.aio.models.generate_videos(
+                model=self._video_model, source=source, config=config
+            )
+        except httpx.RequestError as exc:
+            # 与 submit_post 同口径：请求确定未送达（连接建立失败）或本地/协议错误原样抛出，
+            # 交装饰器的 _should_retry_gemini_submit 分流；其余传输错误（ReadTimeout 等，
+            # 请求可能已送达服务端并已计费）转 AmbiguousSubmitError 终态失败，不自动重试。
+            if is_pre_send_transport_error(exc) or is_non_retryable_local_error(exc):
+                raise
+            raise AmbiguousSubmitError(provider=self.name) from exc
         op_name = getattr(operation, "name", "unknown")
         logger.info("视频生成已提交, operation=%s", op_name)
         return operation
