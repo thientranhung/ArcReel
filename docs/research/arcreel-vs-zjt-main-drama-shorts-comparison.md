@@ -293,3 +293,15 @@ Xem thứ tự tổng ở `learn-from-waoowaoo-2026-09-10.md` §4. Bổ sung t�
 - `state_changes[]` delta + repair rule (7.4) → ghép với entry/exit state trong nhánh storyboard prompt.
 - Ngưỡng mềm/cứng confirm chi phí (7.6) → nhánh `feat/batch-cost-estimate`.
 - Nhận diện style từ ảnh tham chiếu (7.5) → giải quyết luôn việc thiếu UI cho `style` (roadmap §5.2).
+
+
+## 9. Đính chính về audio nhân vật (2026-09-10, sau khi đọc lại code)
+
+Mục 1 và 3.4 ở trên nói ArcReel không có voice clone và reference audio. **Sai.** Khảo sát lại trên `dev`:
+- Character asset đã có `reference_audio` (đường dẫn do hệ thống ghi, user upload qua UI/API), `voice_style` (agent sửa được), `voice_updated_at`; project có `character_voice_binding` = `prompt` | `reference_audio` (`lib/character_voice.py`, migration v10→v11 đã backfill). `lib/config/resolver.py::derive_voice_consistency` gộp thành 3 tier native/soft/none.
+- Upload và validate: `server/routers/files.py`, `ProjectManager.update_character_reference_audio`; ffprobe qua `lib/audio_utils.py::probe_audio_duration_seconds`, ngưỡng **2.0–10.0 s** (`AUDIO_REFERENCE_MIN/MAX_SECONDS`).
+- Video backend: Ark Seedance gửi `{"type":"audio_url", "role":"reference_audio"}` (2.0/mini: ≤3 đoạn, mỗi đoạn 2–15 s, tổng ≤15 s; 2.5: ≤10 đoạn, tổng ≤30 s); Dashscope Wan 2.7-r2v (audio gắn ảnh) và Wan 3.0. Capability chuẩn ở `VideoCapabilities.reference_audio_mode` / `max_reference_audio_count` / `max_reference_audio_total_seconds`.
+
+Còn thiếu thật so với zjt-main: `emotion_voices` (map cảm xúc → mẫu giọng), và MCP tool để agent gán mẫu giọng có sẵn (hiện chỉ user upload). Còn thiếu so với cả hai repo: không có lip-sync sau video, không có TTS thoại nhân vật (thoại vẫn do video model đọc).
+
+Thử nghiệm stable voice trên Bible story bị chặn bởi dữ liệu: chỉ E1S05 có thoại thật ("Hãy có ánh sáng!", quá ngắn); A-đăm chưa có câu thoại nào. Muốn thử phải nâng 2 câu voiceover của Đấng Sáng Tạo (E1S06, E1S08) thành dialogue và ghi một mẫu giọng 2–10 s. Đây là việc sản xuất (đợt 4), không phải việc code.
