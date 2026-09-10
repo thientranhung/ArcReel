@@ -5,7 +5,10 @@ import threading
 
 import pytest
 
+from lib.async_thread import run_noninterruptible_sync
+from lib.formal_write import project_metadata_lock
 from lib.generation_queue import CompensableGenerationResult
+from lib.project_manager import ProjectManager
 from lib.storyboard_sequence import StoryboardImageBindingRequired
 from server.services import generation_tasks
 from tests.integration.server.services.generation_tasks_support import (
@@ -13,6 +16,7 @@ from tests.integration.server.services.generation_tasks_support import (
     _FakePM,
     async_return,
     fake_resolve_ctx,
+    persist_active_fake_project,
     prepare_files,
     register_asset_sheet_claims,
     seed_current_storyboard,
@@ -242,6 +246,64 @@ class TestGenerationTasks:
 
         assert len(compensation_threads) == 1
         assert compensation_threads[0] != event_loop_thread
+
+    async def test_tts_success_event_takes_project_lock_off_the_event_loop(self, tmp_path, monkeypatch):
+        """并发 TTS 提交在工作线程持项目锁并经 EventLoopBridge 等待循环时，完成通知不得卡死循环。
+
+        复现生产死锁的两方：一方是 ``_commit_staged`` 形态的工作线程——持 ``project_metadata_lock``
+        后把观察协程投回循环并同步等待结果；另一方是同一循环上刚完成的另一条 tts 任务，其
+        完成通知经真实 ``ProjectManager.load_project`` 取同一把锁。通知若在循环线程上阻塞取锁，
+        循环再也调度不到观察协程，持锁方永远等不到结果。这里让持锁方等待带上限，超时即释放
+        锁并留下证据，用例以此判定循环是否被卡住，而不是让整个进程挂死。
+        """
+        project_path = prepare_files(tmp_path)
+        fake_pm = _FakePM(project_path)
+        persist_active_fake_project(fake_pm)
+        real_pm = ProjectManager(str(tmp_path / "projects"))
+        loop = asyncio.get_running_loop()
+        lock_held = threading.Event()
+        loop_observations: list[str] = []
+        emitted_entity_ids: list[object] = []
+
+        async def _observe_on_loop() -> str:
+            loop_observations.append("observed")
+            return "observed"
+
+        def _commit_holding_project_lock() -> str:
+            with project_metadata_lock(project_path):
+                lock_held.set()
+                try:
+                    return asyncio.run_coroutine_threadsafe(_observe_on_loop(), loop).result(timeout=5)
+                except TimeoutError:
+                    return "loop_blocked"
+
+        async def _executor(*_args, **_kwargs):
+            return {"resource_type": "audio", "resource_id": "E1S01"}
+
+        monkeypatch.setattr(generation_tasks, "get_project_manager", lambda: real_pm)
+        monkeypatch.setitem(generation_tasks._TASK_EXECUTORS, "tts", _executor)
+        monkeypatch.setattr(
+            generation_tasks,
+            "emit_project_change_batch",
+            lambda _project_name, changes: emitted_entity_ids.extend(change["entity_id"] for change in changes),
+        )
+
+        holder = asyncio.create_task(run_noninterruptible_sync(_commit_holding_project_lock))
+        await asyncio.to_thread(lock_held.wait)
+
+        result = await generation_tasks.execute_generation_task(
+            {
+                "task_type": "tts",
+                "project_name": "demo",
+                "resource_id": "E1S01",
+                "payload": {"script_file": "episode_1.json"},
+            }
+        )
+
+        assert await holder == "observed"
+        assert loop_observations == ["observed"]
+        assert result == {"resource_type": "audio", "resource_id": "E1S01"}
+        assert emitted_entity_ids == ["E1S01"]
 
     async def test_execute_task_validation_errors(self, tmp_path, monkeypatch):
         project_path = prepare_files(tmp_path)
