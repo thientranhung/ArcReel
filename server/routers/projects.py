@@ -938,6 +938,15 @@ async def update_project(name: str, req: UpdateProjectRequest, _t: Translator):
                     project["title"] = req.title
                 if req.style is not None:
                     project["style"] = req.style
+                    # 自由文本风格与「选中内置模版」/「上传自定义参考图」三选一互斥：单独 PATCH
+                    # style（不在同一请求里显式带 style_template_id）时按「脱离模版改自定义」
+                    # 处理，清掉指向已不匹配 style 文本的 style_template_id 及参考图痕迹，避免
+                    # style_template_id 残留但展开文本已被覆盖的孤儿态。请求同时显式给了
+                    # style_template_id 时以下方模版分支为准，不在这里重复处理。
+                    if "style_template_id" not in req.model_fields_set:
+                        project.pop("style_template_id", None)
+                        project.pop("style_image", None)
+                        project.pop("style_description", None)
                 for field in (*_PROJECT_BACKEND_FIELDS, "audio_backend"):
                     if field in req.model_fields_set:
                         value = getattr(req, field)

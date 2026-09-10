@@ -102,7 +102,7 @@ function SectionCard({ kicker, title, description, children, footer }: SectionCa
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export function ProjectSettingsPage() {
-  const { t } = useTranslation("dashboard");
+  const { t } = useTranslation(["dashboard", "templates"]);
   const params = useParams<{ projectName: string }>();
   const projectName = params.projectName || "";
   const [, navigate] = useLocation();
@@ -196,6 +196,21 @@ export function ProjectSettingsPage() {
   // ── Style picker state (independent save flow) ─────────────────────────────
   const [styleValue, setStyleValue] = useState<StylePickerValue | null>(null);
   const [savingStyle, setSavingStyle] = useState(false);
+
+  // ── Custom style text state (independent save flow) ────────────────────────
+  // 自由文本风格：设置页 StylePicker 只有模版/上传参考图两个入口，长篇自定义风格描述
+  // （如定制 Pixar/DreamWorks 风格块）没有直接入口，只能靠这里编辑原始 style 字符串。
+  const [rawStyleText, setRawStyleText] = useState<string>("");
+  const [customStyleDraft, setCustomStyleDraft] = useState<string>("");
+  // project.style_template_id 的字面值（未选模版时为 null）。不能借道 styleValue.templateId
+  // 判断"是否选了模版"——deriveStyleValue 在 templateId 缺失时会回退展示 DEFAULT_TEMPLATE_ID
+  // 供 StylePicker 高亮默认卡片，那只是选择器的展示兜底，不代表 project.json 里真的写了
+  // style_template_id；这里要的是字面值，据此才能正确判断「本来就是自由文本、没有模版」的项目。
+  const [styleTemplateIdRaw, setStyleTemplateIdRaw] = useState<string | null>(null);
+  // 当前 style 是某个模版展开的文本时先只读展示，需用户显式点「脱离模版编辑」才可改写，
+  // 避免误编辑后保存把模版关联悄悄清掉。
+  const [detachedFromTemplate, setDetachedFromTemplate] = useState(false);
+  const [savingCustomStyle, setSavingCustomStyle] = useState(false);
   const initialRef = useRef({
     videoBackend: "", videoProviderI2V: "", videoProviderR2V: "",
     imageBackendDefault: "", imageBackendT2I: "", imageBackendI2I: "",
@@ -352,6 +367,11 @@ export function ProjectSettingsPage() {
       const derivedStyle = deriveStyleValue(project, projectName);
       setStyleValue(derivedStyle);
       initialStyleRef.current = derivedStyle;
+      const nextRawStyle = typeof project.style === "string" ? project.style : "";
+      setRawStyleText(nextRawStyle);
+      setCustomStyleDraft(nextRawStyle);
+      setStyleTemplateIdRaw(typeof project.style_template_id === "string" ? project.style_template_id : null);
+      setDetachedFromTemplate(false);
       initialRef.current = {
         videoBackend: vb, videoProviderI2V: vpi2v, videoProviderR2V: vpr2v,
         imageBackendDefault: ibDefault, imageBackendT2I: ibt2i, imageBackendI2I: ibi2i,
@@ -399,7 +419,18 @@ export function ProjectSettingsPage() {
     && (initialStyleRef.current.templateId !== null
       || initialStyleRef.current.uploadedPreview !== null);
 
+  // 自定义风格文本：模版展开态默认只读，用户显式「脱离模版编辑」或压根没选模版时才可编辑保存。
+  // 用字面 styleTemplateIdRaw（而非 styleValue.templateId）判断——后者在未选模版时会回退
+  // 展示 DEFAULT_TEMPLATE_ID 供选择器高亮默认卡片，不能当作「project.json 里真的选了模版」。
+  const hasTemplateSelected = !!styleTemplateIdRaw;
+  const isCustomStyleEditable = detachedFromTemplate || !hasTemplateSelected;
+  const isCustomStyleDirty = isCustomStyleEditable && customStyleDraft.trim() !== rawStyleText;
+  const selectedTemplateDisplayName = hasTemplateSelected
+    ? t(`templates:name.${styleTemplateIdRaw}`, styleTemplateIdRaw ?? "")
+    : "";
+
   const isDirty =
+    isCustomStyleDirty ||
     videoBackend !== initialRef.current.videoBackend ||
     videoProviderI2V !== initialRef.current.videoProviderI2V ||
     videoProviderR2V !== initialRef.current.videoProviderR2V ||
@@ -428,6 +459,11 @@ export function ProjectSettingsPage() {
 
   const [pendingNavigation, setPendingNavigation] = useState<string | null>(null);
 
+  // React Compiler 在本组件（大量顶层 derived const + hooks）上把 setPendingNavigation
+  // 推断为可省略依赖，与这里手写的 [isDirty, navigate] / [pendingNavigation, navigate]
+  // 不一致，遂放弃自动优化并报 compilation-skipped；手写依赖数组本身是对的（isDirty /
+  // pendingNavigation 都是会变化的普通值，缺了会读到闭包旧值），保留 useCallback 手动记忆化。
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization
   const guardedNavigate = useCallback((path: string) => {
     if (isDirty) {
       setPendingNavigation(path);
@@ -436,6 +472,7 @@ export function ProjectSettingsPage() {
     navigate(path);
   }, [isDirty, navigate]);
 
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization
   const confirmDiscardAndNavigate = useCallback(() => {
     if (!pendingNavigation) return;
     const target = pendingNavigation;
@@ -471,9 +508,17 @@ export function ProjectSettingsPage() {
       }
       // Refetch project to reset styleValue from canonical server state
       const refreshed = await API.getProject(projectName);
-      const nextStyle = deriveStyleValue(refreshed.project as unknown as Record<string, unknown>, projectName);
+      const projectData = refreshed.project as unknown as Record<string, unknown>;
+      const nextStyle = deriveStyleValue(projectData, projectName);
       setStyleValue(nextStyle);
       initialStyleRef.current = nextStyle;
+      // 保持自定义风格文本卡片（styleTemplateIdRaw / rawStyleText）与本次模版/参考图保存同步，
+      // 否则那张卡会展示保存前的旧字面值，直到下次整页重新加载。
+      const nextRawStyle = typeof projectData.style === "string" ? projectData.style : "";
+      setRawStyleText(nextRawStyle);
+      setCustomStyleDraft(nextRawStyle);
+      setStyleTemplateIdRaw(typeof projectData.style_template_id === "string" ? projectData.style_template_id : null);
+      setDetachedFromTemplate(false);
       useAppStore.getState().pushToast(t("saved"), "success");
     } catch (e: unknown) {
       useAppStore.getState().pushToast(t("save_failed", { message: errMsg(e) }), "error");
@@ -481,6 +526,43 @@ export function ProjectSettingsPage() {
       setSavingStyle(false);
     }
   }, [styleValue, projectName, t]);
+
+  const isCustomStyleSaveDisabled =
+    savingCustomStyle || !isCustomStyleEditable || !isCustomStyleDirty || !customStyleDraft.trim();
+
+  const handleDetachFromTemplate = useCallback(() => {
+    setDetachedFromTemplate(true);
+    setCustomStyleDraft(rawStyleText);
+  }, [rawStyleText]);
+
+  const handleSaveCustomStyle = useCallback(async () => {
+    const text = customStyleDraft.trim();
+    if (!text) {
+      useAppStore.getState().pushToast(t("custom_style_text_empty_error"), "error");
+      return;
+    }
+    setSavingCustomStyle(true);
+    try {
+      // style_template_id 未随请求显式带出：后端把「单独 PATCH style」按脱离模版处理，
+      // 自动清掉 style_template_id / style_image / style_description，不必在这里重复传。
+      await API.updateProject(projectName, { style: text });
+      const refreshed = await API.getProject(projectName);
+      const projectData = refreshed.project as unknown as Record<string, unknown>;
+      const nextRawStyle = typeof projectData.style === "string" ? projectData.style : "";
+      setRawStyleText(nextRawStyle);
+      setCustomStyleDraft(nextRawStyle);
+      setStyleTemplateIdRaw(typeof projectData.style_template_id === "string" ? projectData.style_template_id : null);
+      setDetachedFromTemplate(false);
+      const nextStyle = deriveStyleValue(projectData, projectName);
+      setStyleValue(nextStyle);
+      initialStyleRef.current = nextStyle;
+      useAppStore.getState().pushToast(t("saved"), "success");
+    } catch (e: unknown) {
+      useAppStore.getState().pushToast(t("save_failed", { message: errMsg(e) }), "error");
+    } finally {
+      setSavingCustomStyle(false);
+    }
+  }, [customStyleDraft, projectName, t]);
 
   const handleClearStyle = useCallback(() => {
     if (!styleValue) return;
@@ -752,6 +834,62 @@ export function ProjectSettingsPage() {
               }
             >
               <StylePicker value={styleValue} onChange={setStyleValue} />
+            </SectionCard>
+          )}
+
+          {/* Custom style text (independent save flow, detaches from template on save) */}
+          {styleValue && (
+            <SectionCard
+              kicker="Custom Style"
+              title={t("custom_style_text_section_title")}
+              description={t("custom_style_text_section_desc")}
+              footer={
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    // handleSaveCustomStyle 在 onClick 时才执行，ref 写入是合法的；规则误报。
+                    // eslint-disable-next-line react-hooks/refs
+                    onClick={voidPromise(handleSaveCustomStyle)}
+                    disabled={isCustomStyleSaveDisabled}
+                    className={ACCENT_BTN_CLS}
+                    style={ACCENT_BUTTON_STYLE}
+                  >
+                    {savingCustomStyle && (
+                      <Loader2 aria-hidden className="h-3.5 w-3.5 motion-safe:animate-spin" />
+                    )}
+                    {savingCustomStyle ? t("custom_style_text_saving") : t("custom_style_text_save")}
+                  </button>
+                </div>
+              }
+            >
+              {hasTemplateSelected && !detachedFromTemplate ? (
+                <div className="space-y-3">
+                  <p className="text-[12px] leading-[1.55] text-text-3">
+                    {t("custom_style_text_detached_from_template", { template: selectedTemplateDisplayName })}
+                  </p>
+                  <textarea
+                    readOnly
+                    value={rawStyleText}
+                    rows={6}
+                    className="w-full rounded-[8px] border border-hairline bg-bg-grad-a/40 px-3 py-2 text-[12.5px] leading-[1.55] text-text-3"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleDetachFromTemplate}
+                    className={GHOST_BTN_LG_CLS}
+                  >
+                    {t("custom_style_text_detach_button")}
+                  </button>
+                </div>
+              ) : (
+                <textarea
+                  value={customStyleDraft}
+                  onChange={(e) => setCustomStyleDraft(e.target.value)}
+                  rows={6}
+                  placeholder={t("custom_style_text_placeholder")}
+                  className="w-full rounded-[8px] border border-hairline bg-bg-grad-a/40 px-3 py-2 text-[12.5px] leading-[1.55] text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                />
+              )}
             </SectionCard>
           )}
 

@@ -355,6 +355,86 @@ describe("ProjectSettingsPage – style picker", () => {
     });
   });
 
+  it("shows the resolved template text read-only and requires detaching before editing custom style", async () => {
+    vi.spyOn(API, "getProject").mockResolvedValue({
+      project: {
+        title: "Demo",
+        style_template_id: "live_zhang_yimou",
+        style: "画风：参考张艺谋电影风格",
+        episodes: [],
+        characters: {},
+        clues: {},
+      },
+      scripts: {},
+    } as unknown as Awaited<ReturnType<typeof API.getProject>>);
+
+    renderAt("/app/projects/demo/settings");
+
+    const textarea = await screen.findByDisplayValue("画风：参考张艺谋电影风格");
+    expect(textarea).toHaveAttribute("readonly");
+    const saveBtn = screen.getByRole("button", { name: /保存自定义风格|Save custom style/ });
+    expect(saveBtn).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: /脱离模版编辑|Detach and edit/ }));
+    const editable = screen.getByDisplayValue("画风：参考张艺谋电影风格");
+    expect(editable).not.toHaveAttribute("readonly");
+  });
+
+  it("saves custom style text and detaches from the template (clears style_template_id)", async () => {
+    vi.spyOn(API, "getProject").mockResolvedValue({
+      project: {
+        title: "Demo",
+        style_template_id: "live_zhang_yimou",
+        style: "画风：参考张艺谋电影风格",
+        episodes: [],
+        characters: {},
+        clues: {},
+      },
+      scripts: {},
+    } as unknown as Awaited<ReturnType<typeof API.getProject>>);
+    const updateSpy = vi.spyOn(API, "updateProject").mockResolvedValue({
+      success: true,
+      project: {
+        title: "Demo",
+        style: "3D 皮克斯风格渲染，柔和体积光",
+      } as unknown as Awaited<ReturnType<typeof API.updateProject>>["project"],
+    });
+
+    renderAt("/app/projects/demo/settings");
+
+    await screen.findByDisplayValue("画风：参考张艺谋电影风格");
+    fireEvent.click(screen.getByRole("button", { name: /脱离模版编辑|Detach and edit/ }));
+
+    const textarea = screen.getByDisplayValue("画风：参考张艺谋电影风格");
+    fireEvent.change(textarea, { target: { value: "3D 皮克斯风格渲染，柔和体积光" } });
+
+    const saveBtn = screen.getByRole("button", { name: /保存自定义风格|Save custom style/ });
+    expect(saveBtn).toBeEnabled();
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(updateSpy).toHaveBeenCalledWith("demo", { style: "3D 皮克斯风格渲染，柔和体积光" });
+    });
+  });
+
+  it("custom style textarea is directly editable when no template is selected", async () => {
+    vi.spyOn(API, "getProject").mockResolvedValue({
+      project: {
+        title: "Demo",
+        style: "已有的自由文本风格",
+        episodes: [],
+        characters: {},
+        clues: {},
+      },
+      scripts: {},
+    } as unknown as Awaited<ReturnType<typeof API.getProject>>);
+
+    renderAt("/app/projects/demo/settings");
+
+    const textarea = await screen.findByDisplayValue("已有的自由文本风格");
+    expect(textarea).not.toHaveAttribute("readonly");
+  });
+
   it("shows the generation route read-only, with no control to change it", async () => {
     vi.spyOn(API, "getProject").mockResolvedValue({
       project: {

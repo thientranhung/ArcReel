@@ -43,6 +43,13 @@ from server.tool_runtime import (
 # narration_voice / narration_speed: 项目级旁白音色与语速覆盖项,null 时回退全局配置。
 # episode_target_duration: 单集目标时长(秒)软偏好,注入三条脚本规划提示词决定拆多少个单元;
 # 区间校验取 lib.episode_target_duration 的同一把尺,ad 项目拒写。
+# style: 自由文本风格描述,设置页 StylePicker 只有模版/上传参考图两个入口、没有自由文本入口;
+# 写入即与 style_template_id / style_image / style_description 互斥,落盘时自动清掉后三者
+# （见 tool_runtime.mutate_settings），不必额外传 style_template_id: null。不接受 null——
+# 清空走既有的「取消模版选择」REST 路径。
+# video_backend / image_provider_t2i / image_provider_i2i: 项目级模型覆盖(provider/model 或
+# 裸 provider),校验复用 REST PATCH 同一把尺(server.routers._validators.validate_backend_value)。
+# 历史单字段 image_backend 已废弃(数据层拒写、ADR 0054 拆成 t2i/i2i 任务类型桶),不提供别名。
 def patch_project_tool(ctx: ToolContext):
     @tool(
         "patch_project",
