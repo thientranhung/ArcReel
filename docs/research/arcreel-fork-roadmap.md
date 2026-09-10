@@ -148,6 +148,10 @@ Bố trí nhánh trên fork: `main` chỉ mirror upstream (workflow sync fast-fo
 2. PR #2: sửa Codex P1 (screenplay và reference_video chỉ nối tập bằng hình, không thêm lời dẫn), full gate, chuyển ready.
 3. Sửa deadlock flock khi TTS commit song song; sửa lệch tier duration giữa admission và worker; thêm `--timeout-graceful-shutdown` vào CONTRIBUTING.
 
+Phát sinh từ đợt 0 (chưa làm, xếp vào đợt 2 mục 11):
+- Còn nhiều chỗ gọi `load_project` / `load_script` đồng bộ ngay trong `async def` trên event loop (`lib/config/resolver.py`, `server/media_tools/*`, `server/routers/*`, `project_manager.generate_overview`). Không gây deadlock kiểu PR #7 nhưng chặn loop khi tiến trình khác giữ khóa. Cần audit và đưa ra thread pool.
+- Vụ 8 vs 6 trên Seedance ngày 2026-09-09 nhiều khả năng do hai resolver sàn thời lượng TTS (`CurrentTtsSettingsResolver` ở admission vs `ResolvedTtsSettingsResolver.from_audio_lane` ở worker) chứ không phải do thu hẹp theo resolution (PR #8 chỉ sửa phần resolution). Cần hợp nhất hai resolver.
+
 ### Đợt 1: chất lượng prompt
 4. `feat/prompt-rules-asset`: neo da/tóc/mắt, giày bắt buộc, cấm biểu cảm và tính từ trừu tượng; scene ≥3 điểm neo và chỗ trống blocking; prop chỉ mô tả tĩnh; board tham chiếu 4:3 cận mặt + toàn thân nền trắng.
 5. `feat/prompt-rules-storyboard-video`: bảng trạng thái entry/exit mỗi shot; ref chỉ khóa danh tính; 3 câu ràng buộc cố định; kỷ luật diễn xuất; LLM khai `state_changes[]` dạng delta, code bù continuity.
