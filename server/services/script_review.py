@@ -400,6 +400,8 @@ class ScriptReviewService:
                 episode,
                 draft,
                 config_resolver=self.config_resolver,
+                projects=self.pm,
+                project_name=project_name,
             )
         except ValueError as exc:
             # meta.source 缺失等草稿被改坏的情形：把重算失败本身报成一条无 unit 归属的违约，

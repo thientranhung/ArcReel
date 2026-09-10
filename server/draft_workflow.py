@@ -152,6 +152,8 @@ async def revalidate_reference_script_plan_draft(
     draft: QuarantinedDraft,
     *,
     config_resolver: ConfigResolver | None = None,
+    projects: ProjectManager | None = None,
+    project_name: str | None = None,
 ) -> ReferenceDraftRevalidation:
     """按产出时那套校验器全量重判 script_plan 草稿，只读、不写盘、不清草稿。
 
@@ -163,6 +165,8 @@ async def revalidate_reference_script_plan_draft(
     不依赖 ``DraftContext``（``project_path`` / ``project`` 由调用方传入而非从 ctx 派生）：
     内容确认的读时重算（``server/services/script_review.py``）没有 Agent 工具的 ctx，
     只有 ``ProjectManager``；两处共用本函数而不各自加载 project，调用方各自加载一次即可。
+    两者都经 ``projects`` / ``project_name`` 传入各自持有的 ``ProjectManager`` / 项目名——
+    与另两条路线同口径，``_load_script_plan_source_with_basis`` 是计算 basis 的唯一入口。
 
     ``meta.source`` 缺失（草稿被改坏、无从重判）时抛 ``ValueError``。
     """
@@ -183,6 +187,8 @@ async def revalidate_reference_script_plan_draft(
         project,
         episode,
         "reference_video",
+        projects=projects,
+        project_name=project_name,
     )
     if config_resolver is None:
         split_caps = await _fetch_reference_caps_with_fallback(project, episode)
@@ -357,6 +363,8 @@ async def _promote_reference_script_plan(
             episode,
             draft,
             config_resolver=ctx.config_resolver,
+            projects=ctx.pm,
+            project_name=ctx.project_name,
         )
     except ValueError as exc:
         raise DraftWorkflowError("draft_invalid", f"❌ {exc}") from exc
@@ -564,6 +572,8 @@ async def revalidate_drama_script_plan_draft(
     draft: QuarantinedDraft,
     *,
     config_resolver: ConfigResolver | None = None,
+    projects: ProjectManager | None = None,
+    project_name: str | None = None,
 ) -> SingleScriptPlanDraftRevalidation:
     """按产出时那套校验器全量重判 drama script_plan 草稿，只读、不写盘、不清草稿。
 
@@ -572,7 +582,10 @@ async def revalidate_drama_script_plan_draft(
     供应商不接的时长固化进正式文件。``needs_replan`` 同样按现值重新派生，与生成侧同一口径。
 
     与另两条路线的重判器同样不依赖 ``DraftContext``：晋升工具与内容确认的读时重算共用
-    本函数，后者只有 ``ProjectManager``，没有 Agent 工具的 ctx。
+    本函数，后者只有 ``ProjectManager``，没有 Agent 工具的 ctx；两者都把各自持有的
+    ``ProjectManager`` / 项目名经 ``projects`` / ``project_name`` 传入——``_load_script_plan_source_with_basis``
+    是计算 script_plan basis 的唯一入口，生成时与重判时经同一份代码得到同一个 digest，
+    上集剧本的退出态（``previous_episode_exit_state``）才不会在两条路径上分叉。
 
     源文不可读（``meta.source`` 指向缺失 / 改名的路径）时抛 ``ValueError``。
     """
@@ -585,6 +598,8 @@ async def revalidate_drama_script_plan_draft(
         project,
         episode,
         "drama",
+        projects=projects,
+        project_name=project_name,
     )
     if config_resolver is None:
         _default_duration, supported_durations = await _fetch_caps_with_fallback(project, episode)
@@ -636,6 +651,8 @@ async def _promote_drama_script_plan(
             episode,
             draft,
             config_resolver=ctx.config_resolver,
+            projects=ctx.pm,
+            project_name=ctx.project_name,
         )
     except ValueError as exc:
         raise DraftWorkflowError("draft_invalid", f"❌ {exc}") from exc
@@ -732,6 +749,8 @@ async def revalidate_narration_script_plan_draft(
     draft: QuarantinedDraft,
     *,
     config_resolver: ConfigResolver | None = None,
+    projects: ProjectManager | None = None,
+    project_name: str | None = None,
 ) -> SingleScriptPlanDraftRevalidation:
     """按产出时那套校验器全量重判 narration script_plan 草稿，只读、不写盘、不清草稿。
 
@@ -741,7 +760,8 @@ async def revalidate_narration_script_plan_draft(
     对着现值判。
 
     与 ``revalidate_reference_script_plan_draft`` 同样不依赖 ``DraftContext``：内容确认的读时重算
-    没有 Agent 工具的 ctx，只有 ``ProjectManager``，两处共用本函数而不各自加载 project。
+    没有 Agent 工具的 ctx，只有 ``ProjectManager``，两处共用本函数而不各自加载 project；两者都经
+    ``projects`` / ``project_name`` 传入各自持有的 ``ProjectManager`` / 项目名。
 
     ``meta.source`` 缺失（草稿被改坏、无从重判）时抛 ``ValueError``。
     """
@@ -762,6 +782,8 @@ async def revalidate_narration_script_plan_draft(
         project,
         episode,
         "narration",
+        projects=projects,
+        project_name=project_name,
     )
     if config_resolver is None:
         _default_duration, supported_durations = await _fetch_caps_with_fallback(project, episode)
@@ -842,6 +864,8 @@ async def _promote_narration_script_plan(
             episode,
             draft,
             config_resolver=ctx.config_resolver,
+            projects=ctx.pm,
+            project_name=ctx.project_name,
         )
     except ValueError as exc:
         raise DraftWorkflowError("draft_invalid", f"❌ {exc}") from exc
@@ -953,6 +977,8 @@ class _SingleScriptPlanRevalidator(Protocol):
         draft: QuarantinedDraft,
         *,
         config_resolver: ConfigResolver | None = None,
+        projects: ProjectManager | None = None,
+        project_name: str | None = None,
     ) -> Awaitable[SingleScriptPlanDraftRevalidation]: ...
 
 
@@ -969,6 +995,8 @@ async def revalidate_script_plan_draft(
     draft: QuarantinedDraft,
     *,
     config_resolver: ConfigResolver | None = None,
+    projects: ProjectManager | None = None,
+    project_name: str | None = None,
 ) -> ScriptPlanDraftRevalidation:
     """把一份 script_plan 草稿交给它那条路线的重判器，返回路线中立的重判结果。
 
@@ -979,6 +1007,10 @@ async def revalidate_script_plan_draft(
     软违约不进本结果：内容确认面向创作者，降级提示由编辑器预览面板按当前正文实时判出，服务端
     快照会在用户就地补上引用后仍留在页面上。软违约只随 Agent 侧的报告与回执呈现。
 
+    ``projects`` / ``project_name`` 透传给具体路线的重判器（drama 借此纳入上集剧本退出态，
+    与生成入口同一个 basis 计算口径，见 ``revalidate_drama_script_plan_draft``）；缺省时退出态
+    静默省略，其余行为不变。
+
     ``draft.kind`` 不是 script_plan 的三个来源之一（如误传 prompt_authoring 草稿）时抛 ``ValueError``。
     """
     if draft.kind == QUARANTINE_KIND_SCRIPT_PLAN:
@@ -988,13 +1020,23 @@ async def revalidate_script_plan_draft(
             episode,
             draft,
             config_resolver=config_resolver,
+            projects=projects,
+            project_name=project_name,
         )
         content = None if reference.schema_failed else {"units": reference.flat_units}
         return ScriptPlanDraftRevalidation(reference.violations, content)
     revalidator = _SINGLE_SCRIPT_PLAN_REVALIDATORS.get(draft.kind)
     if revalidator is None:
         raise ValueError(f"不是 script_plan 草稿来源，无法重判: {draft.kind}")
-    single = await revalidator(project_path, project, episode, draft, config_resolver=config_resolver)
+    single = await revalidator(
+        project_path,
+        project,
+        episode,
+        draft,
+        config_resolver=config_resolver,
+        projects=projects,
+        project_name=project_name,
+    )
     return ScriptPlanDraftRevalidation(single.violations, None if single.schema_failed else single.content)
 
 

@@ -327,6 +327,68 @@ class TestScreenplaySourceKind:
         assert "<previous_episode_outline>" not in prompt
         assert "承接上集" not in prompt
 
+    def _exit_state(self, **overrides) -> dict:
+        base = {
+            "scene_id": "E1S02",
+            "location": ["山洞"],
+            "characters_present": ["张三", "李四"],
+            "props": ["火把"],
+            "last_utterance": {"speaker": "张三", "text": "我们到了。"},
+            "last_action": "张三举起火把环顾四周",
+        }
+        base.update(overrides)
+        return base
+
+    def test_normalize_includes_previous_episode_exit_state_block(self):
+        # 退出态块紧跟在 <previous_episode_outline> 之后、<episode_outline> 之前
+        prompt = self._normalize_prompt(
+            "novel",
+            episode=2,
+            previous_episode_outline={"title": "初入江湖", "next_episode_teaser": "神秘人相救"},
+            previous_episode_exit_state=self._exit_state(),
+            episode_outline={"title": "绝处逢生", "story_beats": ["疗伤"]},
+        )
+        outline_idx = prompt.index("<previous_episode_outline>")
+        exit_state_idx = prompt.index("<previous_episode_exit_state>")
+        episode_outline_idx = prompt.index("<episode_outline>")
+        assert outline_idx < exit_state_idx < episode_outline_idx
+        assert "山洞" in prompt
+        assert "张三" in prompt
+        assert "李四" in prompt
+        assert "火把" in prompt
+        assert "张三举起火把环顾四周" in prompt
+        assert "我们到了。" in prompt
+        assert "入场状态" in prompt
+
+    def test_normalize_exit_state_block_independent_of_outline(self):
+        # 退出态块不依赖上集大纲存在：无大纲时仍渲染
+        prompt = self._normalize_prompt(
+            "novel",
+            episode=2,
+            previous_episode_exit_state=self._exit_state(),
+        )
+        assert "<previous_episode_outline>" not in prompt
+        assert "<previous_episode_exit_state>" in prompt
+        assert "入场状态" in prompt
+
+    def test_screenplay_exit_state_reuses_visual_only_bridge_wording(self):
+        # screenplay 模式下退出态与上集大纲共用同一条「scene_description-only / 不新增口播」引导，
+        # 不重复出现两次。
+        prompt = self._normalize_prompt(
+            "screenplay",
+            episode=2,
+            previous_episode_outline={"title": "初入江湖", "next_episode_teaser": "神秘人相救"},
+            previous_episode_exit_state=self._exit_state(),
+        )
+        assert "<previous_episode_exit_state>" in prompt
+        assert prompt.count("不得为承接新增任何画外音或台词") == 1
+        assert "入场状态" not in prompt
+
+    def test_normalize_without_previous_exit_state_has_no_block(self):
+        prompt = self._normalize_prompt("novel", episode=2)
+        assert "<previous_episode_exit_state>" not in prompt
+        assert "入场状态" not in prompt
+
     def test_normalize_injects_pacing(self):
         # script_plan（normalize）与 prompt_authoring 一样无条件注入节奏建议，二者共享同一份 render_pacing_section("drama")
         assert self._squash(render_pacing_section("drama")) in self._squash(self._normalize_prompt("novel"))
