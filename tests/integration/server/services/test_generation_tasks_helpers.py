@@ -43,7 +43,9 @@ class TestGenerationTasks:
         }
         structured = generation_tasks._normalize_storyboard_prompt(structured_input, "Anime", "cinematic")
         assert structured == f"Visual style: cinematic\n\n{image_prompt_to_yaml(structured_input, 'Anime').rstrip()}"
-        assert structured.endswith("\nAvoid: 水印、多余文字、Logo")
+        assert structured.endswith(
+            "\nAvoid: 水印、多余文字、Logo、字幕、标题、拼贴、分屏、多余人物、人物直视镜头（除非剧本明确打破第四面墙）"
+        )
 
         with pytest.raises(ValueError, match=r"image_prompt\.scene must be a non-empty string"):
             generation_tasks._normalize_storyboard_prompt({"scene": ""}, "Anime")

@@ -7,12 +7,15 @@
 - 不写无法被 LLM 自检的字数硬限制（"≤200 字"）；用示例隐性表达节奏。
 - 字段说明用少量正例与带解说的反例传达要求，不堆"必须 / 禁止"清单。
 - 节奏建议由 lib.prompt_rules.episode_pacing 注入，跨子智能体与 builder 共享。
+- shot-to-shot 连续性与运镜规则由 lib.prompt_rules.shot_continuity 注入 prompt_authoring，
+  跨 drama / narration / 参考生视频三条路径共享同一份文本。
 """
 
 from lib.prompt_rules.asset_appearance import asset_reference_names, iter_asset_appearances
 from lib.prompt_rules.audience_gear import render_audience_section
 from lib.prompt_rules.episode_pacing import render_pacing_section
 from lib.prompt_rules.episode_target_duration import render_episode_target_duration_rule
+from lib.prompt_rules.shot_continuity import render_shot_continuity_rules
 from lib.speech_rate import speech_rate_units_per_second
 from lib.text_metrics import reading_unit_noun
 
@@ -327,6 +330,7 @@ def build_narration_prompt(
     LLM 不重出这些字段——novel_text 由此不再经 prompt_authoring 的 LLM 扩写漂移。
     """
     pacing_block = render_pacing_section("narration") + "\n\n"
+    continuity_block = render_shot_continuity_rules() + "\n\n"
     segments_block = _format_narration_script_plan_segments(script_plan_segments)
 
     return f"""# 角色与任务
@@ -338,7 +342,7 @@ def build_narration_prompt(
 **输出语言**：所有字符串值必须使用 {target_language}；JSON 键名 / 枚举值保持英文。
 **结构约束**：字段 / 枚举 / 必填项由 response_schema 强制；本提示只解释**如何写好每个字段的内容**。
 
-{pacing_block}# 上下文
+{pacing_block}{continuity_block}# 上下文
 
 <overview>
 {project_overview.get("synopsis", "")}
@@ -487,6 +491,7 @@ def build_drama_prompt(
     prompt 不变。
     """
     pacing_block = render_pacing_section("drama") + "\n\n"
+    continuity_block = render_shot_continuity_rules() + "\n\n"
     audience_block = render_audience_section(audience)
     if audience_block:
         audience_block += "\n\n"
@@ -517,7 +522,7 @@ def build_drama_prompt(
 **结构约束**：字段 / 枚举 / 必填项由 response_schema 强制；本提示只解释**如何写好每个字段的内容**。
 **对齐约束**：每个分镜产出一条视觉层，`scene_id` 必须与下方内容逐字一致、不增不减不改；不要输出口播 / 时长 / 资产等非视觉字段。
 
-{pacing_block}{audience_block}# 上下文
+{pacing_block}{continuity_block}{audience_block}# 上下文
 
 <overview>
 {project_overview.get("synopsis", "")}

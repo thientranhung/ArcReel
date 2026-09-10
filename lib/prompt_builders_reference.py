@@ -9,6 +9,8 @@
 两级 prompt 注入的引用语法规范取自同一份常量
 （``lib.reference_video.writing_syntax.writing_syntax_spec``）：LLM 产出与人在编辑器写的
 是同一种格式，语法只能有一份措辞，本模块不复写。
+- shot-to-shot 连续性与运镜规则由 lib.prompt_rules.shot_continuity 注入，
+  与 drama / narration 两条 prompt_authoring 共享同一份文本。
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from __future__ import annotations
 from lib.prompt_builders_script import _neutralize_tags
 from lib.prompt_rules.asset_appearance import asset_reference_names, iter_asset_appearances
 from lib.prompt_rules.episode_target_duration import render_episode_target_duration_rule
+from lib.prompt_rules.shot_continuity import render_shot_continuity_rules
 from lib.reference_video.writing_syntax import writing_syntax_spec
 from lib.speech_rate import speech_rate_units_per_second
 from lib.text_metrics import reading_unit_noun
@@ -339,6 +342,7 @@ def build_reference_video_prompt(
         if max_refs is not None
         else ""
     )
+    continuity_block = render_shot_continuity_rules() + "\n\n"
 
     return f"""# 角色与任务
 
@@ -355,7 +359,7 @@ def build_reference_video_prompt(
   台词配不上你想要的画面时，请按台词写画面——**不要**改台词。
 - 正文里新出现的 `@[名称]` 必须是候选表中的登记名（script_plan 没引用过的资产也可以引用，但必须已登记）。{max_refs_line}
 
-# 上下文
+{continuity_block}# 上下文
 
 <overview>
 {project_overview.get("synopsis", "")}
