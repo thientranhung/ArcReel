@@ -530,6 +530,29 @@ async def test_remote_grid_list_only_returns_preview_without_a_batch(
     assert isinstance(result.structuredContent["generate_grid"], str)
 
 
+async def test_remote_complete_asset_inventory_description_points_to_the_identity_rules(remote_server) -> None:
+    """远端 MCP 客户端自己写 description，工具描述须指路到 get_workflow_plan 下发的规则字段。"""
+    app = _mounted(remote_server)
+    async with (
+        remote_server.session_manager.run(),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://localhost",
+            headers={"Authorization": "Bearer arc-valid"},
+            follow_redirects=True,
+        ) as client,
+        streamable_http_client("http://localhost/mcp", http_client=client) as (read, write, _),
+        ClientSession(read, write) as session,
+    ):
+        await session.initialize()
+        tools = await session.list_tools()
+
+    description = next(tool.description for tool in tools.tools if tool.name == "complete_asset_inventory")
+    assert description is not None
+    assert "authoring_rules" in description
+    assert "get_workflow_plan" in description
+
+
 async def test_media_errors_are_typed_in_embedded_and_remote_hosts(
     remote_server, remote_projects: ProjectManager
 ) -> None:

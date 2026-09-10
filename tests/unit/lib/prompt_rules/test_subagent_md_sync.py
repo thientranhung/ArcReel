@@ -6,6 +6,7 @@ import pytest
 
 from lib.episode_target_duration import EPISODE_TARGET_DURATION_FIELD
 from lib.episode_target_volume import EPISODE_TARGET_UNITS_FIELD
+from lib.prompt_rules.asset_identity_rules import ASSET_IDENTITY_RULES_FILE
 
 REPO = Path(__file__).resolve().parents[4]
 
@@ -67,3 +68,10 @@ def test_episode_target_duration_fallback_is_mirrored(relative_path: str) -> Non
         and any(marker in line for marker in ("未设", "未显式设", "缺失"))
         for line in lines
     ), f"{relative_path} 未在同一段说明 {EPISODE_TARGET_UNITS_FIELD} 与 {EPISODE_TARGET_DURATION_FIELD} 的回退关系"
+
+
+def test_asset_identity_rules_file_is_referenced_by_analyze_assets() -> None:
+    """analyze-assets 在写 description 前必须指向身份锚定规则正文，不能自行复述一份走样的口径。"""
+    md = (REPO / "agent_runtime_profile/.claude/agents/analyze-assets.md").read_text(encoding="utf-8")
+
+    assert ASSET_IDENTITY_RULES_FILE in md, f"{ASSET_IDENTITY_RULES_FILE} 未在 analyze-assets.md 中找到（漂移）"
