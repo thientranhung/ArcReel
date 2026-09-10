@@ -1262,10 +1262,14 @@ async def update_scene(
                 "segment_break",
                 "utterances",
                 "note",
+                "audio_mode",
             }
+            # note / audio_mode 允许显式写回 null（清空备注 / 重置为整集默认声音归属）；
+            # 其余字段的 null 视为未提供,不参与本次 PATCH。
+            _nullable = {"note", "audio_mode"}
             fields: dict[str, Any] = {}
             for key, raw_value in req.updates.items():
-                if key not in allowed or (raw_value is None and key != "note"):
+                if key not in allowed or (raw_value is None and key not in _nullable):
                     continue
                 value = raw_value
                 if key in {"characters_in_scene", "scenes", "props"} and isinstance(value, list):
@@ -1476,6 +1480,7 @@ class UpdateSegmentRequest(BaseModel):
     video_prompt: dict | str | None = None
     transition_to_next: str | None = None
     note: str | None = None
+    audio_mode: str | None = None
     characters_in_segment: list[str] | None = None
     scenes: list[str] | None = None
     props: list[str] | None = None
@@ -1534,6 +1539,8 @@ async def update_segment(
                     fields[field] = value
             if "note" in req.model_fields_set:
                 fields["note"] = req.note
+            if "audio_mode" in req.model_fields_set:
+                fields["audio_mode"] = req.audio_mode
             for field in ("characters_in_segment", "scenes", "props"):
                 if field in req.model_fields_set:
                     fields[field] = [asset_name_comparison_key(value) for value in (getattr(req, field) or [])]

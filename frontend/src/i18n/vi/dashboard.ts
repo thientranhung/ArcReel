@@ -1929,6 +1929,10 @@ export default {
   'narration_delivery_label': 'Cách giao lời dẫn',
   'narration_delivery_post_production': 'Thêm ở hậu kỳ',
   'narration_delivery_use_tts': 'Dùng TTS hiện tại',
+  'audio_mode_label': 'Nguồn âm thanh',
+  'audio_mode_default': 'Mặc định (theo thiết lập cả tập)',
+  'audio_mode_model': 'Giọng gốc của model',
+  'audio_mode_tts': 'Lời dẫn thu bằng TTS',
 
   // 自定义调用端点
   'ce_section_title': 'Điểm gọi',
