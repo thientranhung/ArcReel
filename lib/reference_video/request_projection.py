@@ -144,6 +144,14 @@ class ProviderProjectionCandidate:
     reference_audio_per_image: bool = False
     first_frame: bool = True
     text_to_video: bool = True
+    #: 型号声明的时长全集（校验后、未按分辨率/参考图收窄）。``supported_durations`` 是参考生
+    #: 视频路径口径（分辨率取供应商兜底）的收窄结果；分镜视频路径按自己实际下发的分辨率从
+    #: 全集另行收窄（``lib.video_duration_tiers``）。未给出时视同全集即 ``supported_durations``。
+    declared_durations: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.declared_durations:
+            object.__setattr__(self, "declared_durations", tuple(self.supported_durations))
 
     @property
     def pair_key(self) -> str:
@@ -334,15 +342,13 @@ def reference_audio_model_facts(
     return audio_track != "always_off", audio_track == "controllable"
 
 
-def strict_reference_durations(
+def declared_reference_durations(
     *,
     provider_id: str,
     model_id: str,
     durations: Sequence[int | float | str],
-    resolution: str | None,
-    generation_type: VideoGenerationType,
 ) -> tuple[int, ...]:
-    """校验并按当前请求条件收窄时长；缺失或矛盾一律 fail loud。"""
+    """校验型号声明的时长全集（升序去重），不做任何收窄；缺失或非法一律 fail loud。"""
 
     normalized_values: set[int] = set()
     for value in durations:
@@ -376,6 +382,20 @@ def strict_reference_durations(
     normalized = tuple(sorted(normalized_values))
     if not normalized:
         raise ProjectionResolutionError("reference_supported_durations_missing", provider=provider_id, model=model_id)
+    return normalized
+
+
+def strict_reference_durations(
+    *,
+    provider_id: str,
+    model_id: str,
+    durations: Sequence[int | float | str],
+    resolution: str | None,
+    generation_type: VideoGenerationType,
+) -> tuple[int, ...]:
+    """校验并按参考生视频路径的请求条件收窄时长；缺失或矛盾一律 fail loud。"""
+
+    normalized = declared_reference_durations(provider_id=provider_id, model_id=model_id, durations=durations)
     allowed = constrain_durations(
         provider_id,
         model_id,
@@ -555,10 +575,11 @@ class ConfigReferenceCapabilityProjection:
             ) from exc
         resolution = resolution or get_provider_fallback(provider_id)
 
+        declared = declared_reference_durations(provider_id=provider_id, model_id=model_id, durations=raw_durations)
         durations = strict_reference_durations(
             provider_id=provider_id,
             model_id=model_id,
-            durations=raw_durations,
+            durations=declared,
             resolution=resolution,
             generation_type=generation_type,
         )
@@ -575,6 +596,7 @@ class ConfigReferenceCapabilityProjection:
             provider_id=provider_id,
             model_id=model_id,
             supported_durations=durations,
+            declared_durations=declared,
             max_reference_images=int(max_references) if max_references is not None else None,
             resolution=resolution,
             generate_audio=bool(caps.get("generate_audio")),

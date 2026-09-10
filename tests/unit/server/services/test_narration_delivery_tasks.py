@@ -10,9 +10,11 @@ from lib.artifact_manifest import (
     ProjectArtifactManifestAdapter,
     compose_video_artifact_basis,
 )
+from lib.narration_delivery import TtsSynthesisSettings
 from lib.speech_artifact_provenance import build_video_duration_basis
 from lib.video_artifact_facts import VideoArtifactCurrencyFacts
 from server.services import narration_delivery_tasks
+from tests.fakes import FakeConfigResolver
 
 
 def _typed_video_metadata(
@@ -632,3 +634,79 @@ async def test_restored_rejected_short_video_is_not_reused_for_current_tts(
         )
         is None
     )
+
+
+class _UnsetResolutionResolver(FakeConfigResolver):
+    """项目未配置分辨率：分镜视频路径下发 ``None``，档位不得按供应商兜底档位收窄。"""
+
+    async def resolve_resolution(self, project: dict, provider_id: str, model_id: str) -> None:  # type: ignore[override]
+        del project, provider_id, model_id
+        return
+
+
+class _FixedTtsSettings:
+    async def resolve_tts_synthesis_settings(self, project: dict) -> TtsSynthesisSettings:
+        del project
+        return TtsSynthesisSettings(provider_id="fake-tts", model_id="tts-1", voice="alloy", speed=None)
+
+
+def _veo_storyboard_request(tmp_path: Path, *, config_resolver: FakeConfigResolver) -> dict:
+    project = {
+        "name": "demo",
+        "episodes": [{"episode": 1, "script_file": "episode_1.json"}],
+        "generation_mode": "storyboard",
+    }
+    item = {"segment_id": "E1S01", "narration": "旁白。", "duration_seconds": 6}
+    return {
+        "project_name": "demo",
+        "project": project,
+        "project_path": tmp_path,
+        "script": {"episode": 1, "content_mode": "narration", "segments": [item]},
+        "script_file": "episode_1.json",
+        "item": item,
+        "visual_prompt": {"action": "Run.", "camera_motion": "Static"},
+        "seed": None,
+        "generation_type": "i2v",
+        "planned_duration_seconds": 6,
+        "confirmed_request_duration_seconds": None,
+        "tts_in_progress": False,
+        "config_resolver": config_resolver,
+        "tts_settings_resolver": _FixedTtsSettings(),
+    }
+
+
+async def test_storyboard_admission_narrows_tiers_by_the_resolution_the_worker_sends(tmp_path: Path) -> None:
+    """Veo 未配置分辨率时准入按全集取档（6 → 6），不按 1080p 兜底档位把剧本时长抬到 8。"""
+
+    result = await narration_delivery_tasks.prepare_current_storyboard_narrated_video_duration(
+        **_veo_storyboard_request(
+            tmp_path,
+            config_resolver=_UnsetResolutionResolver(
+                provider_id="gemini-aistudio",
+                model="veo-3.1-generate-preview",
+                supported_durations=(4, 6, 8),
+            ),
+        )
+    )
+
+    assert result.request_duration_seconds == 6
+    assert result.adjustment == "exact"
+    assert "reference_duration_confirmation_required" not in {problem.code for problem in result.problems}
+
+
+async def test_storyboard_admission_keeps_the_saved_resolution_constraint(tmp_path: Path) -> None:
+    """已保存 1080p 时 Veo 只剩 8 秒档，剧本 6 秒仍要向上取档并请求确认。"""
+
+    result = await narration_delivery_tasks.prepare_current_storyboard_narrated_video_duration(
+        **_veo_storyboard_request(
+            tmp_path,
+            config_resolver=FakeConfigResolver(
+                provider_id="gemini-aistudio",
+                model="veo-3.1-generate-preview",
+                supported_durations=(4, 6, 8),
+            ),
+        )
+    )
+
+    assert result.request_duration_seconds == 8
+    assert result.adjustment == "up"

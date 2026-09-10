@@ -56,7 +56,7 @@ from lib.audio_utils import (
     probe_existing_audio_duration_seconds,
 )
 from lib.config.registry import PROVIDER_REGISTRY
-from lib.config.resolver import constrain_durations, video_bucket_for_generation_mode
+from lib.config.resolver import video_bucket_for_generation_mode
 from lib.config.service import DEFAULT_VIDEO_POLL_TIMEOUT_SECONDS
 from lib.db.base import DEFAULT_USER_ID
 from lib.generation_queue import (
@@ -121,6 +121,7 @@ from lib.thumbnail import extract_video_thumbnail
 from lib.version_manager import PaidVersionCommit
 from lib.video_artifact_facts import VideoArtifactCurrencyFacts
 from lib.video_backends.base import VideoCapabilityError
+from lib.video_duration_tiers import storyboard_video_duration_tiers
 from lib.video_visual_provenance import build_storyboard_video_visual_basis, resolve_video_aspect_ratio
 from lib.visual_artifact_provenance import (
     GridStoryboardVisual,
@@ -2517,14 +2518,19 @@ async def execute_video_task(
     )
     if duration_seconds is None:
         duration_seconds = project.get("default_duration")
+    # 档位按实际下发的分辨率从能力全集收窄，与入队前的准入预检
+    # （``prepare_current_storyboard_narrated_video_duration``）共用同一入口、同一分辨率口径：
+    # 两边各自收窄会为同一条剧本时长取到不同档位。能力不可解析（全集为空）时结果为空。
+    duration_tiers = storyboard_video_duration_tiers(
+        registry_provider_id, model_name, supported_durations, resolution=resolution
+    )
     if not duration_seconds:
         # 取首项前先按当前分辨率的联动约束收窄：否则 Veo + 1080p/4k 的默认（Auto）设置会取到
         # 4 秒，被 backend 的「该分辨率必须 8 秒」拒绝——UI 已按同一份声明门控，此处不收窄
         # 就等于默认配置必然失败。显式指定的时长不经此收窄，其合法性由 assert_duration_supported
         # 与 backend 的执行期校验把关。
-        candidates = constrain_durations(registry_provider_id, model_name, supported_durations, resolution=resolution)
         duration_seconds = (
-            candidates[0] if candidates else _get_model_default_duration(registry_provider_id, model_name)
+            duration_tiers[0] if duration_tiers else _get_model_default_duration(registry_provider_id, model_name)
         )
 
     delivery_projection = None
@@ -2542,21 +2548,9 @@ async def execute_video_task(
             or isinstance(current_planned_duration, bool)
             or current_planned_duration <= 0
         ):
-            candidates = constrain_durations(
-                registry_provider_id,
-                model_name,
-                supported_durations,
-                resolution=resolution,
-            )
-            if not candidates:
+            if not duration_tiers:
                 raise ValueError("TTS video request requires a current integer planned duration")
-            current_planned_duration = candidates[0]
-        constrained_durations = constrain_durations(
-            registry_provider_id,
-            model_name,
-            supported_durations,
-            resolution=resolution,
-        )
+            current_planned_duration = duration_tiers[0]
         delivery_projection = await prepare_current_narrated_video_duration(
             project=project,
             episode=episode,
@@ -2564,7 +2558,7 @@ async def execute_video_task(
             project_path=project_path,
             delivery=delivery_options.narration_delivery,
             planned_duration_seconds=current_planned_duration,
-            supported_durations=constrained_durations,
+            supported_durations=duration_tiers,
             confirmed_request_duration_seconds=delivery_options.confirmed_request_duration_seconds,
             resolver=ResolvedTtsSettingsResolver.from_audio_lane(ctx.audio),
             tts_in_progress=await tts_task_in_progress(
@@ -2590,7 +2584,7 @@ async def execute_video_task(
         delivery_projection = prepare_narrated_video_duration(
             narration=delivery_projection.narration,
             planned_duration_seconds=current_planned_duration,
-            supported_durations=constrained_durations,
+            supported_durations=duration_tiers,
             confirmed_request_duration_seconds=delivery_options.confirmed_request_duration_seconds,
             current_visual_duration_seconds=current_visual_duration,
         )
@@ -2644,19 +2638,7 @@ async def execute_video_task(
             include_voice_styles=not ctx.video.is_silent,
         )
         artifact_duration_basis = build_video_duration_basis(duration_seconds)
-        artifact_duration_tiers = tuple(
-            sorted(
-                {
-                    duration_seconds,
-                    *constrain_durations(
-                        registry_provider_id,
-                        model_name,
-                        supported_durations,
-                        resolution=resolution,
-                    ),
-                }
-            )
-        )
+        artifact_duration_tiers = tuple(sorted({duration_seconds, *duration_tiers}))
         media_inputs = [
             ProviderMediaInput(
                 path=storyboard_file,

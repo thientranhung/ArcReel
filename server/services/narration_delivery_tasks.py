@@ -64,6 +64,7 @@ from lib.speech_composition import admit_script_unit
 from lib.storyboard_sequence import resolve_storyboard_video_inputs
 from lib.version_manager import VersionManager
 from lib.video_artifact_facts import VideoArtifactCurrencyFacts
+from lib.video_duration_tiers import storyboard_video_duration_tiers
 from lib.video_visual_provenance import (
     build_reference_video_visual_basis,
     build_storyboard_video_visual_basis,
@@ -461,12 +462,21 @@ async def prepare_current_storyboard_narrated_video_duration(
     resolver = config_resolver or ConfigResolver(async_session_factory)
     candidate = await ConfigReferenceCapabilityProjection(resolver).resolve_candidate(project, generation_type)
     request_resolution = await resolver.resolve_resolution(project, candidate.provider_id, candidate.model_id)
+    # 档位按分镜视频路径实际下发的分辨率从型号全集收窄，与 worker（``execute_video_task``）
+    # 同一个入口、同一个分辨率口径；``candidate.supported_durations`` 是参考生视频口径
+    # （分辨率补供应商兜底）的收窄结果，用它会让预检与执行取到不同档位。
+    duration_tiers = storyboard_video_duration_tiers(
+        candidate.provider_id,
+        candidate.model_id,
+        candidate.declared_durations,
+        resolution=request_resolution,
+    )
     planned = planned_duration_seconds
     if planned is None:
         configured = project.get("default_duration")
         planned = configured if isinstance(configured, int) and not isinstance(configured, bool) else None
     if planned is None or planned <= 0:
-        planned = candidate.supported_durations[0]
+        planned = duration_tiers[0] if duration_tiers else candidate.declared_durations[0]
     preparation = admit_script_unit(resolve_script_kind(script), item).preparation
     active = tts_in_progress
     if active is None:
@@ -535,7 +545,7 @@ async def prepare_current_storyboard_narrated_video_duration(
     result = prepare_narrated_video_duration(
         narration=narration,
         planned_duration_seconds=planned,
-        supported_durations=candidate.supported_durations,
+        supported_durations=duration_tiers,
         confirmed_request_duration_seconds=confirmed_request_duration_seconds,
         current_visual_duration_seconds=current_visual_duration,
         current_reusable_visual_duration_seconds=current_reusable_visual_duration,
