@@ -141,6 +141,8 @@ Hai tập (2 phút 22 giây) hết 20,81 USD video thực trả trên BytePlus, 
 
 Thay thế §3 và gộp §5.2, §5.3, §5.5. Duyệt làm đến đợt 3; đợt 4 để sau. Mỗi đợt kết thúc bằng đo lại trên Bible story bằng Codex QA. Không làm: viết lại bằng Go, node canvas, Temporal, lineage graph đầy đủ.
 
+Bố trí nhánh trên fork: `main` chỉ mirror upstream (workflow sync fast-forward hằng ngày); `dev` là nhánh tích hợp và default branch, mọi PR nhắm vào `dev`; `dev` merge `main` định kỳ để nhận thay đổi upstream. Các workflow chỉ dành cho maintainer upstream (release-please, project-status-sync, docker, nightly) đã tắt trên fork.
+
 ### Đợt 0: dọn nợ
 1. Merge PR #1 (Gemini schema), #3 (BytePlus model id), #4 (sync upstream) vào fork.
 2. PR #2: sửa Codex P1 (screenplay và reference_video chỉ nối tập bằng hình, không thêm lời dẫn), full gate, chuyển ready.
