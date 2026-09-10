@@ -3690,8 +3690,12 @@ async def execute_generation_task(task: dict[str, Any], *, claimed_provider_id: 
             )
         else:
             result = await executor(project_name, resource_id, payload, user_id=user_id, task_id=queue_task_id)
+        # 完成通知会取项目锁（tts 分支经 load_project 读生成模式）。该锁是阻塞式 flock，
+        # 且并发任务的提交事务可能正在工作线程里持锁并经 EventLoopBridge 等待本循环，
+        # 因此必须离开事件循环线程取锁，否则循环被 flock 卡住、持锁方永远等不到循环。
         try:
-            emit_generation_success_batch(
+            await run_noninterruptible_sync(
+                emit_generation_success_batch,
                 task_type=task_type,
                 project_name=project_name,
                 resource_id=resource_id,
