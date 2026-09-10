@@ -45,14 +45,31 @@ def _candidate_block(characters: dict, scenes: dict, props: dict) -> str:
     )
 
 
-def _format_outline_block(episode_outline: dict | None, next_episode_outline: dict | None) -> str:
-    """把分集大纲渲染为 XML 块；两者皆空时返回空串（不留空标签）。
+# 开场承接要求：reference_video 的台词 / 画外音逐字来自原文（ADR 0041），承接只能落在首个 unit 的
+# 视觉描述上，不得为承接新增任何口播。
+_OPENING_BRIDGE_GUIDE = (
+    "开场（第一个 unit）须在视觉描述里用画面承接上集：呼应上集集尾钩子或预告所指的处境、交代时间与空间过渡，"
+    "再进入本集原文；台词与画外音仍须逐字来自原文，不得为承接新增任何画外音或台词，"
+    "也不要复述上集剧情或把上集内容当作本集的新 unit 重新展开。"
+)
 
-    与 drama script_plan 同源的做法：大纲是本集内容边界的既定契约，拆分 unit 时先知道本集要讲到
-    哪里、下集从哪接，才不会把跨集情节吞进来或提前抖包袱。
+
+def _format_outline_block(
+    episode_outline: dict | None,
+    next_episode_outline: dict | None,
+    previous_episode_outline: dict | None = None,
+) -> str:
+    """把分集大纲渲染为 XML 块；全部为空时返回空串（不留空标签）。
+
+    与 drama script_plan 同源的做法：大纲是本集内容边界的既定契约，拆分 unit 时先知道上集在哪收、
+    本集要讲到哪里、下集从哪接，才不会把跨集情节吞进来或提前抖包袱。
     """
     blocks: list[str] = []
-    for tag, outline in (("episode_outline", episode_outline), ("next_episode_outline", next_episode_outline)):
+    for tag, outline in (
+        ("previous_episode_outline", previous_episode_outline),
+        ("episode_outline", episode_outline),
+        ("next_episode_outline", next_episode_outline),
+    ):
         if not isinstance(outline, dict) or not outline:
             continue
         lines: list[str] = []
@@ -70,6 +87,8 @@ def _format_outline_block(episode_outline: dict | None, next_episode_outline: di
             lines.append(f"下集预告：{teaser.strip()}")
         if lines:
             blocks.append(f"<{tag}>\n" + "\n".join(lines) + f"\n</{tag}>")
+            if tag == "previous_episode_outline":
+                blocks.append(_OPENING_BRIDGE_GUIDE)
     return "\n\n".join(blocks) + "\n\n" if blocks else ""
 
 
@@ -93,6 +112,7 @@ def build_reference_units_split_prompt(
     episode_target_duration: int | None = None,
     episode_outline: dict | None = None,
     next_episode_outline: dict | None = None,
+    previous_episode_outline: dict | None = None,
 ) -> str:
     """Step-1 video_unit 拆分 prompt：源文 → 扁平 unit 表（时长 + 原文锚 + 引用语法正文）。
 
@@ -235,7 +255,7 @@ def build_reference_units_split_prompt(
 {novel_text}
 </novel>
 
-{_format_outline_block(episode_outline, next_episode_outline)}# 拆分规则
+{_format_outline_block(episode_outline, next_episode_outline, previous_episode_outline)}# 拆分规则
 
 当前正在生成第 {episode} 集。请覆盖全部源文情节，按叙事顺序逐 unit 产出。
 

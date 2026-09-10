@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from typing import Literal
 
 from lib.artifact_manifest import ArtifactBasis
-from lib.episode_ledger import episode_outline_context
+from lib.episode_ledger import episode_outline_context, previous_episode_outline_context
 from lib.episode_target_duration import project_episode_target_duration
 from lib.speech_rate import project_speech_rate_override, speech_rate_units_per_second
 from lib.text_metrics import reading_unit_noun
@@ -155,6 +155,11 @@ def project_script_plan_prompt_inputs(
                 "next_episode_outline": next_episode_outline,
             }
         )
+        # 上集大纲只在存在时进 basis：首集与上集无规划数据时提示词逐字不变，不能让存量
+        # 项目的脚本规划产物因新增一个恒为 None 的键而判 stale。
+        previous_episode_outline = previous_episode_outline_context(project, episode)
+        if previous_episode_outline is not None:
+            inputs["previous_episode_outline"] = previous_episode_outline
 
     if variant in {"reference_video", "drama"}:
         raw_source_language = project.get("source_language")
@@ -215,6 +220,10 @@ def _freeze_script_plan_prompt_inputs(
     if generation_mode == "reference_video":
         for field in ("episode_outline", "next_episode_outline"):
             frozen[field] = _freeze_reference_outline(prompt_inputs.get(field))
+        if "previous_episode_outline" in frozen:
+            frozen["previous_episode_outline"] = _freeze_reference_outline(
+                prompt_inputs.get("previous_episode_outline")
+            )
 
     # 未设单集目标时长时该键不进 basis：此时提示词与不带该参数时逐字相同，把 None 写进
     # digest 会让每个从未用过该设置的存量项目的脚本规划与剧本产物一并判 stale。设了目标

@@ -114,9 +114,43 @@ _HOOK_LANDING_GUIDE = (
 )
 
 
-def _format_episode_outline_block(episode_outline: dict | None, next_episode_outline: dict | None) -> str:
-    """渲染本集大纲 + 下集大纲两个上下文块；无规划数据时返回空串（prompt 不渲染该段）。"""
+# 开场承接要求：第二集起的观众是从上集结尾进来的，开场若直接从本集原文第一句起跳，
+# 上集预告与本集之间就断了线。仅在账本提供了上集大纲时渲染。
+# novel：可以新增一两句画外音承接。screenplay 走逐字契约（台词与画外音只能来自原文），
+# 承接只能落在首个分镜的 scene_description（画面过渡），不得新增任何口播。
+_OPENING_BRIDGE_GUIDE_NOVEL = (
+    "开场（第一个分镜）须用一两句画外音承接上集：呼应上集的下集预告语或集尾钩子、交代时间过渡"
+    "（如「次日」「多年后」），再自然进入本集原文；只点到为止，不要复述上集剧情，"
+    "也不要把上集内容当作本集的新场景重新展开。"
+)
+_OPENING_BRIDGE_GUIDE_VERBATIM = (
+    "开场（第一个分镜）须在 scene_description 里用画面承接上集：呼应上集集尾钩子或预告所指的处境、"
+    "交代时间与空间过渡（如清晨同一地点、多年后的旧宅），再进入本集原文；"
+    "承接只能落在视觉描述上，utterances 仍须逐字来自原文，不得为承接新增任何画外音或台词，"
+    "也不要把上集内容当作本集的新场景重新展开。"
+)
+
+
+def _format_episode_outline_block(
+    episode_outline: dict | None,
+    next_episode_outline: dict | None,
+    previous_episode_outline: dict | None = None,
+    *,
+    verbatim_dialogue: bool = False,
+) -> str:
+    """渲染上集 / 本集 / 下集大纲三个上下文块；无规划数据时返回空串（prompt 不渲染该段）。
+
+    ``verbatim_dialogue=True``（screenplay）时开场承接只下发视觉版要求，不允许新增画外音。
+    """
     parts: list[str] = []
+    if previous_episode_outline:
+        title = previous_episode_outline.get("title")
+        title_line = f"上集标题：{title}\n" if title else ""
+        parts.append(f"""<previous_episode_outline>
+上集大纲（仅用于设计本集开场的承接，不要把上集情节重新写进本集）：
+{title_line}{_format_outline_lines(previous_episode_outline)}
+</previous_episode_outline>""")
+        parts.append(_OPENING_BRIDGE_GUIDE_VERBATIM if verbatim_dialogue else _OPENING_BRIDGE_GUIDE_NOVEL)
     if episode_outline:
         title = episode_outline.get("title")
         title_line = f"本集标题：{title}\n" if title else ""
@@ -540,6 +574,7 @@ def build_normalize_prompt(
     episode_target_duration: int | None = None,
     episode_outline: dict | None = None,
     next_episode_outline: dict | None = None,
+    previous_episode_outline: dict | None = None,
 ) -> str:
     """脚本规划的规范化 prompt：源文 → 结构化分镜内容（utterances + source_text + 视觉改编描述）。
 
@@ -549,7 +584,8 @@ def build_normalize_prompt(
 
     ``source_kind="screenplay"`` 翻为「提取/逐字保留」：台词与画外音逐字落 utterances、视觉转写为
     scene_description；默认 ``"novel"`` 维持「改编」语义、画外音由语境判断放开。``episode_outline`` /
-    ``next_episode_outline`` 来自分集账本，驱动内容覆盖故事节点、末场落地集尾钩子。
+    ``next_episode_outline`` 来自分集账本，驱动内容覆盖故事节点、末场落地集尾钩子；
+    ``previous_episode_outline``（第二集起）驱动开场承接上集预告 / 钩子：novel 可加画外音，screenplay 只用画面。
 
     ``source_language`` 供时长指引的「台词口播时长」单向下界软指引取语速（阅读单位 / 秒，来自
     ``lib.speech_rate`` 单一真相源，与保存期上界 warning、字幕派生同口径）；缺省 / 未登记回退默认语速。
@@ -574,7 +610,9 @@ def build_normalize_prompt(
     scene_rule = _NORMALIZE_SCENE_RULE_SCREENPLAY if is_screenplay else _NORMALIZE_SCENE_RULE_NOVEL
     utterances_rule = _NORMALIZE_UTTERANCES_SCREENPLAY if is_screenplay else _NORMALIZE_UTTERANCES_NOVEL
     break_rule = _NORMALIZE_BREAK_RULE_SCREENPLAY if is_screenplay else _NORMALIZE_BREAK_RULE_NOVEL
-    outline_block = _format_episode_outline_block(episode_outline, next_episode_outline)
+    outline_block = _format_episode_outline_block(
+        episode_outline, next_episode_outline, previous_episode_outline, verbatim_dialogue=is_screenplay
+    )
 
     # 资产引用字段（characters_in_scene / scenes / props，须逐字等于 project.json 登记名）与
     # 说话人引用 `utterances[].speaker`（须等于 characters_in_scene 中登记的角色名）须排除在目标语言要求外——

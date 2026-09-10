@@ -561,6 +561,41 @@ def test_script_plan_basis_ignores_an_unset_episode_target_duration(
     assert dirty.digest == unset.digest
 
 
+@pytest.mark.parametrize("generation_mode", ["storyboard", "reference_video"])
+def test_script_plan_basis_ignores_a_missing_previous_episode_outline(generation_mode: str) -> None:
+    """首集与上集无规划数据时提示词逐字不变，上集大纲不进 basis——否则存量项目整体判 stale。"""
+    axes = {"content_mode": "drama", "generation_mode": generation_mode}
+    legacy_first = {"episode": 1, "title": "初入江湖"}
+    planned_second = {"episode": 2, "title": "绝处逢生", "hook": "身份"}
+
+    first_without_ledger = build_script_plan_basis("source", episode=1, project=axes)
+    first_with_legacy_entry = build_script_plan_basis("source", episode=1, project={**axes, "episodes": [legacy_first]})
+    second_without_previous = build_script_plan_basis(
+        "source", episode=2, project={**axes, "episodes": [planned_second]}
+    )
+    second_with_legacy_previous = build_script_plan_basis(
+        "source", episode=2, project={**axes, "episodes": [legacy_first, planned_second]}
+    )
+
+    assert first_with_legacy_entry.digest == first_without_ledger.digest
+    assert second_with_legacy_previous.digest == second_without_previous.digest
+
+
+@pytest.mark.parametrize("generation_mode", ["storyboard", "reference_video"])
+def test_script_plan_basis_tracks_the_previous_episode_outline(generation_mode: str) -> None:
+    axes = {"content_mode": "drama", "generation_mode": generation_mode}
+    planned = {"episode": 1, "title": "初入江湖", "hook": "坠崖", "outline": {"next_episode_teaser": "相救"}}
+    reworded = {**planned, "outline": {"next_episode_teaser": "被带走"}}
+    second = {"episode": 2}
+
+    without_previous = build_script_plan_basis("source", episode=2, project={**axes, "episodes": [second]})
+    baseline = build_script_plan_basis("source", episode=2, project={**axes, "episodes": [planned, second]})
+    changed = build_script_plan_basis("source", episode=2, project={**axes, "episodes": [reworded, second]})
+
+    assert baseline.digest != without_previous.digest
+    assert changed.digest != baseline.digest
+
+
 def test_script_plan_basis_tracks_a_set_episode_target_duration() -> None:
     project = {"content_mode": "drama", "generation_mode": "storyboard"}
 
