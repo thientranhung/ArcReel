@@ -814,7 +814,12 @@ def build_remote_mcp_server(
         expected_source_revision: str,
         entries: dict[str, Any] | None = None,
     ) -> CallToolResult:
-        """Atomically commit an asset inventory against a source revision."""
+        """Atomically commit an asset inventory against a source revision.
+
+        Each character/scene/prop description must follow the identity rules delivered in
+        get_workflow_plan().next_action.authoring_rules (skin/hair/eye color anchors for
+        characters, spatial anchors for scenes, static-only visuals for props).
+        """
         try:
             project_scope = _project_scope(project, projects)
             request = CompleteAssetInventoryRequest(
