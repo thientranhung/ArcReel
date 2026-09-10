@@ -63,12 +63,35 @@ export const WORKFLOW_ACTION_TYPES = [
 
 export type WorkflowActionType = (typeof WORKFLOW_ACTION_TYPES)[number];
 
+/** One priced unit's amount, in `WorkflowCostEstimate.units` / `.total`. */
+export interface WorkflowCostAmount {
+  amount: number;
+  currency: string;
+}
+
+/**
+ * Per-unit and aggregate cost projection for a generation `next_action`
+ * (`generate_videos` / `generate_storyboards` / `generate_grid` /
+ * `generate_asset_sheets` / `generate_tts` / `regenerate_tts`). `total` is
+ * `null` when no unit is priced, or when priced units span more than one
+ * currency. `threshold === "confirm"` implies `WorkflowNextAction.requires_confirmation`.
+ */
+export interface WorkflowCostEstimate {
+  units: Record<string, WorkflowCostAmount>;
+  total: WorkflowCostAmount | null;
+  unpriced_units: string[];
+  threshold: "ok" | "warn" | "confirm";
+}
+
 export interface WorkflowNextAction {
   type: WorkflowActionType;
   args: Record<string, unknown>;
   requested_ids: string[];
   requires_confirmation: boolean;
   reason: string;
+  /** Absent/`null` for action types that do not project cost, and for plans from
+   *  legacy backends that predate this field. */
+  cost_estimate?: WorkflowCostEstimate | null;
 }
 
 /**
@@ -289,4 +312,7 @@ export interface WorkflowPlanRequest {
   episode?: number | null;
   narration_delivery?: NarrationDelivery | null;
   confirmed_request_durations?: Record<string, number>;
+  /** Explicit consent to a `cost_estimate.threshold === "confirm"`; mirrors
+   *  `confirmed_request_durations`. */
+  confirmed_cost?: boolean;
 }

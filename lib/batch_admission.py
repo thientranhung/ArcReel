@@ -35,6 +35,14 @@ from lib.generation_result import (
 DURATION_CONFIRMATION_CODE = "reference_duration_confirmation_required"
 """The one blocker a user can clear by agreeing to the request tier and cost."""
 
+COST_CONFIRMATION_CODE = "cost_confirmation_required"
+"""The blocker a user clears by agreeing to a request whose quoted cost crosses
+the project's (or global default) hard cost threshold. Folded into the same
+``confirmation_only`` / ``confirmation_tiers`` mechanism as
+``DURATION_CONFIRMATION_CODE`` — a ticket may carry either or both."""
+
+_CONFIRMATION_ONLY_CODES = frozenset({DURATION_CONFIRMATION_CODE, COST_CONFIRMATION_CODE})
+
 
 class BatchAdmissionDecision(StrEnum):
     """Whether this request may create its task set."""
@@ -69,7 +77,7 @@ class UnitAdmissionTicket:
     def confirmation_only(self) -> bool:
         """True when the only thing standing in the way is the user's consent."""
 
-        return bool(self.problems) and all(problem.code == DURATION_CONFIRMATION_CODE for problem in self.problems)
+        return bool(self.problems) and all(problem.code in _CONFIRMATION_ONLY_CODES for problem in self.problems)
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -304,6 +312,7 @@ def refused_ticket(
 
 
 __all__ = [
+    "COST_CONFIRMATION_CODE",
     "DURATION_CONFIRMATION_CODE",
     "BatchAdmission",
     "BatchAdmissionDecision",

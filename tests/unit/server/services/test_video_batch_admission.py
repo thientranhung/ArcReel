@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from lib.batch_admission import BatchAdmissionDecision
+from lib.batch_admission import COST_CONFIRMATION_CODE, BatchAdmissionDecision
 from lib.generation_result import GenerationAction, GenerationProblemCode, GenerationSelectionMode
 from lib.narration_delivery import (
     POST_PRODUCTION,
@@ -15,6 +16,7 @@ from lib.narration_delivery import (
     NarrationDeliveryPreparation,
     NarrationDeliveryProblem,
     NarrationTtsStatus,
+    VideoRequestCostFacts,
     prepare_narrated_video_duration,
 )
 from lib.reference_video.request_projection import ReferenceRequestOptions
@@ -275,3 +277,59 @@ async def test_extra_tickets_join_the_same_verdict(monkeypatch, tmp_path: Path):
 
     assert admission.decision is BatchAdmissionDecision.BLOCKED
     assert admission.unit_ids == ("E9U9", "E1U1")
+
+
+async def test_storyboard_quote_above_hard_threshold_requires_cost_confirmation(monkeypatch, tmp_path: Path):
+    """一笔超过硬阈值的报价在未确认时把整批折成 confirmation_required，确认后放行同一目标集合。
+
+    走真实的 ``quote_video_request`` → ``calculate_cost`` 报价路径（内置 provider 不查自定义
+    供应商价表），不 patch 私有的 ``_quote_for_display`` seam：选一个真实存在、单价已知的内置
+    模型与足够长的时长，让报价本身自然越过测试给定的硬阈值。
+    """
+
+    _stub_state(monkeypatch)
+
+    # gemini-aistudio 的 veo-3.1-generate-preview，720p + 有声档单价 $0.40/s（见
+    # lib/config/registry.py::_VEO_STANDARD_RATES）；60s 报价 $24，越过下面 $20 的硬阈值。
+    cost_facts = VideoRequestCostFacts(
+        provider_id="gemini-aistudio",
+        model_id="veo-3.1-generate-preview",
+        resolution="720p",
+        duration_seconds=60,
+        generate_audio=True,
+    )
+
+    async def _prepare(**_kwargs):
+        # actual == planned duration (4s) so the only confirmation-only problem in play is
+        # the cost one — a duration-tier mismatch would otherwise also gate on its own.
+        preparation = _preparation(problems=(), tts_status=NarrationTtsStatus.CURRENT, actual=4.0)
+        return dataclasses.replace(preparation, cost=cost_facts)
+
+    monkeypatch.setattr(admission_mod, "prepare_current_storyboard_narrated_video_duration", _prepare)
+
+    async def _admit(*, confirmed_cost: bool):
+        return await admit_storyboard_video_batch(
+            project_name="demo",
+            project={},
+            project_path=tmp_path,
+            script=_script(),
+            script_file="episode_1.json",
+            items=[("E1S01", {"duration_seconds": 4}, "一个镜头")],
+            request_options=ReferenceRequestOptions(narration_delivery=USE_TTS),
+            operation="generate_videos",
+            selection=GenerationSelectionMode.MISSING_ONLY,
+            confirmed_cost=confirmed_cost,
+            cost_hard_threshold_usd=20.0,
+        )
+
+    rejected = await _admit(confirmed_cost=False)
+    assert rejected.decision is BatchAdmissionDecision.CONFIRMATION_REQUIRED
+    ticket = rejected.tickets[0]
+    assert COST_CONFIRMATION_CODE in {problem.code for problem in ticket.problems}
+    tier = rejected.confirmation_tiers()[0]
+    assert tier.cost_amount == pytest.approx(24.0)
+    assert tier.cost_currency == "USD"
+
+    accepted = await _admit(confirmed_cost=True)
+    assert accepted.decision is BatchAdmissionDecision.ADMITTED
+    assert accepted.unit_ids == ("E1S01",)

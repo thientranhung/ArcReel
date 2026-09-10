@@ -27,6 +27,7 @@ from lib.artifact_activation import (
 )
 from lib.artifact_manifest import ArtifactKey
 from lib.batch_admission import (
+    COST_CONFIRMATION_CODE,
     BatchAdmission,
     UnitAdmissionTicket,
     refused_ticket,
@@ -391,6 +392,40 @@ def active_task_problem(task: Mapping[str, Any]) -> GenerationProblem:
     )
 
 
+def _cost_confirmation_problem(unit_id: str, cost_payload: Mapping[str, object]) -> GenerationProblem:
+    """A ticket-level, consent-only blocker for a quote crossing the hard cost threshold.
+
+    Reuses ``GenerationAction.CONFIRM_REQUEST_DURATION`` — the same "answer with an
+    explicit flag and resend" UX as the duration-tier confirmation — rather than adding
+    a parallel action type; the two share one confirmation mechanism in
+    ``lib.batch_admission`` (``confirmation_only`` / ``confirmation_tiers``).
+    """
+
+    amount = cost_payload.get("amount")
+    currency = cost_payload.get("currency")
+    return GenerationProblem(
+        code=COST_CONFIRMATION_CODE,
+        detail=f"该 unit 预估费用 {amount} {currency}，超过项目费用阈值，需确认（confirmed_cost=true）后才能提交",
+        action=GenerationAction.CONFIRM_REQUEST_DURATION,
+        params={"unit_id": unit_id, "request_cost": dict(cost_payload)},
+    )
+
+
+def _cost_confirmation_required(
+    cost_payload: Mapping[str, object] | None,
+    *,
+    confirmed_cost: bool,
+    cost_hard_threshold_usd: float | None,
+) -> bool:
+    if cost_payload is None or confirmed_cost or cost_hard_threshold_usd is None:
+        return False
+    amount = cost_payload.get("amount")
+    currency = cost_payload.get("currency")
+    if currency != "USD" or not isinstance(amount, (int, float)) or isinstance(amount, bool):
+        return False
+    return amount >= cost_hard_threshold_usd
+
+
 async def _quote_for_display(
     cost: VideoRequestCostFacts | None,
     *,
@@ -459,6 +494,8 @@ async def admit_reference_video_batch(
     operation: str,
     selection: GenerationSelectionMode,
     confirmed_request_durations: Mapping[str, int] | None = None,
+    confirmed_cost: bool = False,
+    cost_hard_threshold_usd: float | None = None,
     spec_check: Callable[[dict[str, Any]], object] | None = None,
     extra_tickets: Sequence[UnitAdmissionTicket] = (),
     user_id: str = DEFAULT_USER_ID,
@@ -467,6 +504,11 @@ async def admit_reference_video_batch(
     tts_settings_resolver: TtsSettingsResolver | None = None,
 ) -> BatchAdmission:
     """Evaluate every reference unit of one request against the current state.
+
+    ``confirmed_cost`` / ``cost_hard_threshold_usd`` gate a per-unit quote that
+    crosses the hard cost threshold behind the same consent flow as
+    ``confirmed_request_durations`` (see ``lib.batch_admission.COST_CONFIRMATION_CODE``).
+    A ``None`` threshold (the caller could not resolve one, or none applies) never gates.
 
     ``spec_check`` is the caller's own "can this unit be requested at all" guard
     (structural enqueue validation and speech admission). Sharing it keeps the
@@ -587,6 +629,8 @@ async def admit_reference_video_batch(
             await _reference_ticket(
                 projection=projection,
                 current_options=current_options,
+                confirmed_cost=confirmed_cost,
+                cost_hard_threshold_usd=cost_hard_threshold_usd,
             )
         )
 
@@ -602,6 +646,8 @@ async def _reference_ticket(
     *,
     projection: ReferenceUnitRequestProjection,
     current_options: ReferenceRequestOptions,
+    confirmed_cost: bool = False,
+    cost_hard_threshold_usd: float | None = None,
 ) -> UnitAdmissionTicket:
     unit_id = projection.unit_id
     payload = projection.to_advisory_payload()
@@ -632,6 +678,10 @@ async def _reference_ticket(
         problems.append(_generation_problem(cost_problem, unit_id=unit_id))
     if cost_payload is not None:
         payload["request_cost"] = cost_payload
+        if _cost_confirmation_required(
+            cost_payload, confirmed_cost=confirmed_cost, cost_hard_threshold_usd=cost_hard_threshold_usd
+        ):
+            problems.append(_cost_confirmation_problem(unit_id, cost_payload))
     return UnitAdmissionTicket(
         unit_id=unit_id,
         problems=tuple(problems),
@@ -661,6 +711,8 @@ async def admit_storyboard_video_batch(
     operation: str,
     selection: GenerationSelectionMode,
     confirmed_request_durations: Mapping[str, int] | None = None,
+    confirmed_cost: bool = False,
+    cost_hard_threshold_usd: float | None = None,
     extra_tickets: Sequence[UnitAdmissionTicket] = (),
     user_id: str = DEFAULT_USER_ID,
     queue: GenerationQueue | None = None,
@@ -737,7 +789,14 @@ async def admit_storyboard_video_batch(
             config_resolver=config_resolver,
             tts_settings_resolver=tts_settings_resolver,
         )
-        tickets.append(await _storyboard_ticket(resource_id=resource_id, preparation=preparation))
+        tickets.append(
+            await _storyboard_ticket(
+                resource_id=resource_id,
+                preparation=preparation,
+                confirmed_cost=confirmed_cost,
+                cost_hard_threshold_usd=cost_hard_threshold_usd,
+            )
+        )
 
     return BatchAdmission(
         operation=operation,
@@ -751,6 +810,8 @@ async def _storyboard_ticket(
     *,
     resource_id: str,
     preparation: NarratedVideoDurationPreparation,
+    confirmed_cost: bool = False,
+    cost_hard_threshold_usd: float | None = None,
 ) -> UnitAdmissionTicket:
     payload = preparation.to_payload()
     reuses = video_request_reuses_current_visual(
@@ -777,6 +838,10 @@ async def _storyboard_ticket(
         problems.append(_generation_problem(cost_problem, unit_id=resource_id))
     if cost_payload is not None:
         payload["request_cost"] = cost_payload
+        if _cost_confirmation_required(
+            cost_payload, confirmed_cost=confirmed_cost, cost_hard_threshold_usd=cost_hard_threshold_usd
+        ):
+            problems.append(_cost_confirmation_problem(resource_id, cost_payload))
     return UnitAdmissionTicket(
         unit_id=resource_id,
         problems=tuple(problems),
@@ -1001,6 +1066,8 @@ async def admit_storyboard_video_request(
     operation: str,
     selection: GenerationSelectionMode,
     extra_tickets: Sequence[UnitAdmissionTicket],
+    confirmed_cost: bool = False,
+    cost_hard_threshold_usd: float | None = None,
     user_id: str = DEFAULT_USER_ID,
     queue: GenerationQueue | None = None,
     config_resolver: ConfigResolver | None = None,
@@ -1034,6 +1101,8 @@ async def admit_storyboard_video_request(
         items=targets,
         request_options=request_options,
         confirmed_request_durations=confirmed_request_durations,
+        confirmed_cost=confirmed_cost,
+        cost_hard_threshold_usd=cost_hard_threshold_usd,
         operation=operation,
         selection=selection,
         extra_tickets=extra_tickets,

@@ -13,12 +13,38 @@ drama / ad × storyboard / reference_video）之间哪些步骤适用、顺序�
 mcp__arcreel__get_workflow_plan({
   "episode": N,                                  // 可选：用户指定集数时传
   "narration_delivery": "post_production" | "use_tts",  // 可选：本次旁白交付选择
-  "confirmed_request_durations": {"E1U1": 8}    // 可选：用户已确认的逐视频单元申请档位（键是 unit ID）
+  "confirmed_request_durations": {"E1U1": 8},   // 可选：用户已确认的逐视频单元申请档位（键是 unit ID）
+  "confirmed_cost": true                          // 可选：用户已确认接受超阈值的预估费用
 })
 ```
 
-三个字段都只属于**这一次查询**，服务端不会持久化。因此每次重新查询都要把仍然成立的选择原样
+四个字段都只属于**这一次查询**，服务端不会持久化。因此每次重新查询都要把仍然成立的选择原样
 带上；漏带等于把选择撤回。
+
+## 费用预估
+
+生成类下一动作（`generate_videos` / `generate_storyboards` / `generate_grid` /
+`generate_asset_sheets` / `generate_tts` / `regenerate_tts`）在 `next_action.cost_estimate`
+上携带这次请求的预估费用：
+
+| 字段 | 含义 |
+|---|---|
+| `units` | 按 unit_id 记的逐条预估 `{amount, currency}`；无法定价（如未配置单价的自定义供应商）的 unit 不在其中 |
+| `total` | 全部已定价 unit 的合计；跨币种或没有任何 unit 可定价时为 `null`，此时不要自己把 `units` 加总当作合计 |
+| `unpriced_units` | 无法定价的 unit_id 列表 |
+| `threshold` | `ok` / `warn` / `confirm`——只在 `total` 按 USD 求出时才可能是 `warn` / `confirm`，其余一律 `ok` |
+
+`threshold == "confirm"` 时 `next_action.requires_confirmation` 为 `true`：像 `confirmed_request_durations`
+一样，向用户说明预估费用（`total`，以及 `unpriced_units` 非空时提醒有 unit 无法定价），拿到明确同意后
+带 `confirmed_cost: true` 重新查询计划——只有 `generate_videos` 这条路径把它继续带进生成工具本身才会
+真正放行（其余动作目前只在计划预览层面提示，见下）；`threshold == "warn"` 时可以提醒但不必阻塞。
+
+`generate_videos` 的费用阈值确认与档位确认共用同一套整批准入机制：某个视频单元的报价超过项目
+硬阈值时，它与档位确认一样出现在 `steps[].admission.confirmation.tiers[]` 里，`cost_amount` /
+`cost_currency` 已经是该档的合计——两种确认可以同时出现在同一批上，一次 `confirmed_cost: true`
+连同 `confirmed_request_durations` 一起重发即可。其余动作（资产图 / 分镜图 / 宫格 / TTS）的
+`cost_estimate` 目前只服务于「预览时如实告知费用」，尚未在对应生成工具的提交入口接一道同等的
+硬阈值拦截，不要因为看到 `threshold: "ok"` 就假定提交侧也做了同等校验。
 
 调用时机：进入工作流、用户说「继续 / 下一步 / 查看进度」、以及**每次工具或子智能体完成之后**。
 `Read` / `Glob` 只用于取执行已选定动作所需的内容，不用于另建一套状态机。不得根据空资产 bucket、
