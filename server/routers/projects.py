@@ -52,6 +52,7 @@ from lib.episode_target_duration import (
 from lib.i18n import Translator
 from lib.json_io import domain_error_on_value_error
 from lib.profile_manifest import ContentMode
+from lib.project_audience import PROJECT_AUDIENCE_FIELD
 from lib.project_change_hints import project_change_source
 from lib.project_manager import EmptySourceError, EpisodeScriptReboundError, SourceKind, get_project_manager
 from lib.script_batch_edit import ScriptBatchEditCommand, ScriptBatchEditor, script_revision
@@ -222,6 +223,8 @@ class CreateProjectRequest(BaseModel):
     target_duration: int | None = Field(default=None, gt=0)
     # 仅 content_mode=ad：创作诉求短文本（可空，不走 source_loader）
     brief: str | None = None
+    # 目标受众（可选，自由文本，如「儿童 6-10 岁」）：留空则不落盘，读时按未设处理
+    audience: str | None = None
     # 生成模式：创建时必须显式选择 storyboard 或 reference_video；缺失或旧 grid 值由
     # Pydantic 校验返回 422。创建后不可更改（PATCH 模型结构上无此字段）。
     generation_mode: Literal["storyboard", "reference_video"]
@@ -291,6 +294,8 @@ class UpdateProjectRequest(BaseModel):
     default_text_backend: str | None = None
     style_template_id: str | None = None
     clear_style_image: bool | None = None
+    # 目标受众（可选，自由文本）：空串 = 清除回落未设；null 视为未提供字段，靠 model_fields_set 区分
+    audience: str | None = None
     episodes: list[EpisodePatch] | None = None
     model_settings: dict[str, dict[str, str | None]] | None = None
 
@@ -692,6 +697,9 @@ async def create_project(
             extras = {field: value for field in _PROJECT_BACKEND_FIELDS if (value := getattr(req, field))}
             if req.model_settings is not None:
                 extras["model_settings"] = req.model_settings
+            audience_text = (req.audience or "").strip()
+            if audience_text:
+                extras[PROJECT_AUDIENCE_FIELD] = audience_text
             # 生成模式与宫格开关并入 extras 一次性写入，避免 create 后再 load-save 的额外 RMW；
             # 两字段恒写显式值（grid_storyboard 默认 false 也落盘），新项目即 v5 完整形态
             extras["generation_mode"] = req.generation_mode
@@ -1028,6 +1036,13 @@ async def update_project(name: str, req: UpdateProjectRequest, _t: Translator):
                     if not is_ad:
                         raise HTTPException(status_code=400, detail=_t("ad_only_field", field="brief"))
                     project["brief"] = req.brief if req.brief is not None else ""
+                # 目标受众：自由文本，空串 / null 一律清除回落未设（与 narration_voice 同口径）
+                if "audience" in req.model_fields_set:
+                    audience_text = (req.audience or "").strip()
+                    if audience_text:
+                        project[PROJECT_AUDIENCE_FIELD] = audience_text
+                    else:
+                        project.pop(PROJECT_AUDIENCE_FIELD, None)
 
                 if "style_template_id" in req.model_fields_set:
                     if req.style_template_id is None:

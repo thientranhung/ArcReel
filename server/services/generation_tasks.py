@@ -78,6 +78,7 @@ from lib.narration_delivery import (
     register_narration_audio_transactionally,
 )
 from lib.path_safety import safe_exists, safe_join, try_safe_join
+from lib.project_audience import project_audience
 from lib.project_change_hints import build_change_label, emit_project_change_batch, project_change_source
 from lib.project_manager import (
     EpisodeScriptReboundError,
@@ -391,11 +392,12 @@ def _normalize_storyboard_prompt(
     style: str,
     style_description: str = "",
     references: Sequence[ReferenceImageSlot] = (),
+    audience: str = "",
 ) -> str:
     """Render one semantic storyboard prompt through the shared provider projection."""
 
     return render_storyboard_image_prompt(
-        prompt, style=style, style_description=style_description, references=references
+        prompt, style=style, style_description=style_description, references=references, audience=audience
     )
 
 
@@ -1672,6 +1674,7 @@ class _StoryboardImageInputs:
     project_path: Path
     style: str
     style_description: str
+    audience: str
     currency_resolver: ArtifactCurrencyResolver
     claims: list[ArtifactInputClaim]
     references: StoryboardReferenceSet
@@ -1709,6 +1712,7 @@ async def execute_storyboard_task(
         _style_description = _project.get("style_description", "")
         if not isinstance(_style, str) or not isinstance(_style_description, str):
             raise ValueError("storyboard style and style description must be strings")
+        _audience = project_audience(_project) or ""
         _references = collect_storyboard_references(
             _project,
             _project_path,
@@ -1724,6 +1728,7 @@ async def execute_storyboard_task(
             project_path=_project_path,
             style=_style,
             style_description=_style_description,
+            audience=_audience,
             currency_resolver=_currency_resolver,
             claims=_formal_claims,
             references=_references,
@@ -1749,7 +1754,11 @@ async def execute_storyboard_task(
         _sent = _assembled.clamped(context.image.max_reference_images, model=context.image.backend_model)
         _semantic_prompt = _assembled.item.get("image_prompt")
         _prompt_text = _normalize_storyboard_prompt(
-            _semantic_prompt, inputs.style, inputs.style_description, references=_sent.visual_references
+            _semantic_prompt,
+            inputs.style,
+            inputs.style_description,
+            references=_sent.visual_references,
+            audience=inputs.audience,
         )
         # 依据与 claim 按完整装配集冻结登记，供应商只收裁剪后的前几张：与目标态规划器同口径。
         _frozen = freeze_image_references(_assembled.provider_references or None, _assembled.visual_references)
@@ -1768,6 +1777,7 @@ async def execute_storyboard_task(
                 style_description=inputs.style_description,
                 aspect_ratio=get_aspect_ratio(project, "storyboards"),
                 references=_frozen.visual_references,
+                audience=inputs.audience,
             )
         except BaseException:
             _frozen.cleanup()
@@ -2482,6 +2492,7 @@ async def execute_video_task(
             voice_characters=(None if ctx.video.is_silent else project.get("characters"))
             if content_mode == "drama"
             else None,
+            audience=project_audience(project) or "",
         ).digest
 
     def _current_visual_basis_digest() -> str:
@@ -2500,6 +2511,7 @@ async def execute_video_task(
         voice_characters=(None if ctx.video.is_silent else (project.get("characters") or {}))
         if content_mode == "drama"
         else None,
+        audience=project_audience(project) or "",
     )
     service_tier = payload.get("video_provider_settings", {}).get("service_tier", "default")
 
@@ -2896,7 +2908,8 @@ async def execute_character_task(
         _char_data = _project["characters"][_char_key]
         _style = _project.get("style", "")
         _style_desc = _project.get("style_description", "")
-        _full_prompt = build_character_prompt(resource_id, prompt, _style, _style_desc)
+        _audience = project_audience(_project) or ""
+        _full_prompt = build_character_prompt(resource_id, prompt, _style, _style_desc, _audience)
         _ref_images = None
         _ref_path = _char_data.get("reference_image")
         if _ref_path:
@@ -2923,6 +2936,7 @@ async def execute_character_task(
                 style_description=str(_style_desc or ""),
                 aspect_ratio="16:9",
                 references=_frozen.visual_references,
+                audience=_audience,
             )
         except BaseException:
             _frozen.cleanup()
@@ -3002,7 +3016,13 @@ async def execute_design_task(
             raise ValueError(f"{kind} not found: {resource_id}")
         style = project.get("style", "")
         style_desc = project.get("style_description", "")
-        full_prompt = prompt_builder(resource_id, prompt, style, style_desc)
+        audience = project_audience(project) or ""
+        # product 的 prompt builder 不接受 audience（保持写实中性，同 style/style_description）
+        full_prompt = (
+            prompt_builder(resource_id, prompt, style, style_desc)
+            if kind == "product"
+            else prompt_builder(resource_id, prompt, style, style_desc, audience)
+        )
         refs = reference_collector(project, project_path, resource_id) if reference_collector else None
         visual_references = tuple(
             VisualReference(
@@ -3024,6 +3044,7 @@ async def execute_design_task(
                 style_description=str(style_desc or ""),
                 aspect_ratio="16:9",
                 references=frozen.visual_references,
+                audience=audience,
             )
         except BaseException:
             frozen.cleanup()

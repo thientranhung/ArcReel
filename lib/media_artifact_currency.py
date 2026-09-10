@@ -25,6 +25,7 @@ from lib.artifact_version_provenance import parse_typed_audio_settings, parse_ty
 from lib.asset_types import asset_name_comparison_key
 from lib.character_voice import character_voice_binding
 from lib.narration_delivery import TtsSynthesisSettings, build_narration_audio_basis
+from lib.project_audience import project_audience
 from lib.project_manager import ProjectManager, resolve_episode_script_binding
 from lib.reference_video.duration_slots import resolve_duration_slot
 from lib.reference_video.prompt_render import resolve_reference_audio_paths
@@ -183,6 +184,7 @@ def project_video_basis_components(
             request_assets=clamp_reference_assets(hydration.available, shape.reference_image_limit),
             style=project.get("style") if isinstance(project.get("style"), str) else None,
             aspect_ratio=resolve_video_aspect_ratio(project),
+            audience=project_audience(project),
         )
     else:
         raise ValueError(f"resource type does not carry video artifact metadata: {resource_type}")

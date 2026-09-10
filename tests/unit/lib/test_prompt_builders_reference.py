@@ -113,6 +113,19 @@ def test_build_reference_video_prompt_max_refs_none_skips_rule():
     assert "模型上限" not in _prompt_authoring_prompt(max_refs=None)
 
 
+def test_build_reference_video_prompt_has_no_audience_block_by_default():
+    assert "面向儿童" not in _prompt_authoring_prompt()
+
+
+def test_build_reference_video_prompt_renders_kids_gear_when_audience_indicates_children():
+    prompt = _prompt_authoring_prompt(audience="儿童 6-10 岁")
+    assert "面向儿童（约 6-10 岁）观众的创作规则" in prompt
+
+
+def test_build_reference_video_prompt_ignores_adult_audience():
+    assert "面向儿童" not in _prompt_authoring_prompt(audience="都市情感，成年观众")
+
+
 def test_build_reference_units_split_prompt_contains_constraints_and_candidates():
     prompt = _split_prompt(
         novel_text="李明推门走进酒馆",

@@ -22,6 +22,7 @@ from typing import Any
 
 from lib.artifact_activation import active_artifact_currency_resolver
 from lib.artifact_input_claims import resolve_usable_episode_script_input
+from lib.project_audience import project_audience
 from lib.project_manager import ProjectManager, get_project_manager
 from lib.prompt_builders import render_storyboard_image_prompt
 from lib.prompt_utils import render_storyboard_video_prompt
@@ -188,6 +189,7 @@ async def preview_item_prompts(
     def _render_both() -> ItemPromptPreview:
         style = project.get("style", "")
         style_description = project.get("style_description", "")
+        audience = project_audience(project) or ""
         image = _render(
             item.get("image_prompt"),
             lambda prompt: render_storyboard_image_prompt(
@@ -195,6 +197,7 @@ async def preview_item_prompts(
                 style=style if isinstance(style, str) else "",
                 style_description=style_description if isinstance(style_description, str) else "",
                 references=_storyboard_references(),
+                audience=audience,
             ),
         )
         if image.text is not None and image_warnings:
@@ -206,6 +209,7 @@ async def preview_item_prompts(
                 item,
                 content_mode=content_mode,
                 voice_characters=voice_characters,
+                audience=audience,
             ),
         )
         return ItemPromptPreview(

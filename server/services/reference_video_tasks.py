@@ -30,6 +30,7 @@ from lib.generation_queue import (
 )
 from lib.narration_delivery import USE_TTS
 from lib.path_safety import safe_join
+from lib.project_audience import project_audience
 from lib.reference_video.artifact_selection import CurrentReferenceAssets
 from lib.reference_video.execution_checkpoint import (
     NarrationExecutionFacts,
@@ -645,6 +646,7 @@ async def execute_reference_video_task(
                     request_assets=staged_request_assets,
                     style=project.get("style"),
                     aspect_ratio=aspect_ratio,
+                    audience=project_audience(project),
                 )
             )
             artifact_speech = await asyncio.to_thread(
