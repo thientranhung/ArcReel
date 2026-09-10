@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 from dataclasses import replace
@@ -44,7 +45,7 @@ _SUBSCHEMA_MAP_KEYS = frozenset({"properties", "patternProperties", "$defs", "de
 _INSTANCE_KEYWORDS = frozenset({"const", "enum", "default", "examples"})
 
 
-def _const_to_enum(node: object, *, in_subschema_map: bool = False) -> object:
+def _const_to_enum(node: object, *, in_subschema_map: bool = False, drop_additional_properties: bool = True) -> object:
     """归一 schema 的枚举形约束为 ``responseSchema`` 通道可表达的形态。
 
     两步归一（同一次位置感知遍历完成）：
@@ -54,25 +55,35 @@ def _const_to_enum(node: object, *, in_subschema_map: bool = False) -> object:
        ``enum`` 仅支持字符串（proto 定义如此），整数时长枚举 ``[4,6,8]`` 转为 ``["4","6","8"]``
        后精确集合的约束解码依然成立；解析侧 ``_duration_literal`` 的机械强转恢复 int。
 
+    ``drop_additional_properties`` 为 True 时同一次遍历还会丢弃 schema 关键字位置的
+    ``additionalProperties``（Developer API 的 ``responseSchema`` 不支持；字段名恰好叫它时仍按
+    子 schema 保留）；Vertex 后端支持该关键字，传 False 原样保留。
+
     ``const`` 出现的位置有三种，须区分对待（这是正确性的不可约最小状态机）：
     - **schema 关键字**：归一（仅标量，对齐本仓库唯一的 const 形态——单值时长 Literal）；
     - **字段名**（``_SUBSCHEMA_MAP_KEYS`` 映射的 key）：当前 dict 的 key 是名字，其值仍是子 schema，
       继续按 schema 递归（里面真正的 const 照常归一）；
     - **实例数据**（``_INSTANCE_KEYWORDS`` 的值）：原样保留、不递归。
     """
+    recurse = functools.partial(_const_to_enum, drop_additional_properties=drop_additional_properties)
     if isinstance(node, list):
-        return [_const_to_enum(item) for item in node]
+        return [recurse(item) for item in node]
     if not isinstance(node, dict):
         return node
     if in_subschema_map:
         # 当前 dict 的 key 是属性名/定义名；每个值才是子 schema
-        return {k: _const_to_enum(v) for k, v in node.items()}
+        return {k: recurse(v) for k, v in node.items()}
     out: dict = {}
     for k, v in node.items():
+        if k == "additionalProperties" and drop_additional_properties:
+            # Gemini Developer API（AI Studio）的 responseSchema 不认识该关键字（400 INVALID_ARGUMENT）；
+            # Pydantic ``extra="forbid"`` 会渲染出它。约束解码本身不会产出未声明字段，丢弃无损。
+            # Vertex 支持该关键字（含 dict[str, T] 的值 schema），不丢。
+            continue
         if k in _INSTANCE_KEYWORDS:
             out[k] = v  # 值是实例数据，原样保留
         else:
-            out[k] = _const_to_enum(v, in_subschema_map=k in _SUBSCHEMA_MAP_KEYS)
+            out[k] = recurse(v, in_subschema_map=k in _SUBSCHEMA_MAP_KEYS)
     if "const" in out and (out["const"] is None or isinstance(out["const"], (str, int, float, bool))):
         out["enum"] = [out.pop("const")]
     if "enum" in out and isinstance(out["enum"], list) and any(not isinstance(x, str) for x in out["enum"]):
@@ -81,7 +92,7 @@ def _const_to_enum(node: object, *, in_subschema_map: bool = False) -> object:
     return out
 
 
-def _to_response_schema(schema: dict | type) -> dict:
+def _to_response_schema(schema: dict | type, *, drop_additional_properties: bool = True) -> dict:
     """把 response_schema 统一转成 Gemini ``response_schema``（``types.Schema``）可消费的 dict。
 
     Gemini 有两条结构化输出通道：``response_schema``（wire 字段 ``responseSchema``，OpenAPI 子集，
@@ -91,7 +102,7 @@ def _to_response_schema(schema: dict | type) -> dict:
     先 ``resolve_schema`` 内联 ``$ref``，再经 ``_const_to_enum`` 把 ``const`` 与非字符串 ``enum``
     归一为 ``types.Schema`` 可表达的字符串枚举。
     """
-    normalized = _const_to_enum(resolve_schema(schema))
+    normalized = _const_to_enum(resolve_schema(schema), drop_additional_properties=drop_additional_properties)
     assert isinstance(normalized, dict)  # resolve_schema 必返回 dict
     return normalized
 
@@ -178,7 +189,10 @@ class GeminiTextBackend:
         config: dict = {}
         if response_schema:
             config["response_mime_type"] = "application/json"
-            config["response_schema"] = _to_response_schema(response_schema)
+            config["response_schema"] = _to_response_schema(
+                response_schema,
+                drop_additional_properties=self._backend != "vertex",
+            )
         if system_prompt:
             config["system_instruction"] = system_prompt
         if max_output_tokens is not None:

@@ -204,6 +204,56 @@ class TestGenerate:
         assert props["with_default"]["default"] == {"const": 42}
         assert props["obj_const"] == {"const": {"const": 5}}
 
+    def test_additional_properties_dropped_from_response_schema(self, backend):
+        """回归：``extra="forbid"`` 渲染的 ``additionalProperties`` 不得进入 responseSchema。
+
+        Gemini Developer API 对该关键字返回 400 INVALID_ARGUMENT（"Unknown name
+        additional_properties"），分集规划 DramaPlanDraft 整批失败。types.Schema 本身接受该字段，
+        SDK 侧校验拦不住，须在 _build_config 产出层保证任何嵌套层级都不带它；
+        字段名恰好叫 additionalProperties 时仍是子 schema，保留。
+        """
+        from lib.episode_planner import DramaPlanDraft
+
+        def walk(node: object) -> list[object]:
+            if isinstance(node, dict):
+                return (
+                    [node]
+                    + [x for k, v in node.items() if k != "properties" for x in walk(v)]
+                    + [x for v in node.get("properties", {}).values() for x in walk(v)]
+                )
+            if isinstance(node, list):
+                return [x for item in node for x in walk(item)]
+            return []
+
+        rs = backend._build_config(DramaPlanDraft, None)["response_schema"]
+        assert rs["properties"]["episodes"]["items"]["required"]
+        assert all("additionalProperties" not in d for d in walk(rs))
+
+        named_field = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"additionalProperties": {"type": "string", "additionalProperties": False}},
+        }
+        out = backend._build_config(named_field, None)["response_schema"]
+        assert out == {"type": "object", "properties": {"additionalProperties": {"type": "string"}}}
+
+    def test_vertex_backend_keeps_additional_properties(self):
+        """Vertex 支持 additionalProperties（含 dict[str, T] 的值 schema），不能被 AI Studio 的规避误伤。
+
+        Vertex 构造要读服务账号凭证文件，与本断言无关；绕过 __init__ 只设 backend 标识，
+        _build_config 按 self._backend 决定是否丢弃该关键字。
+        """
+        vertex = GeminiTextBackend.__new__(GeminiTextBackend)
+        vertex._backend = "vertex"
+        schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"scores": {"type": "object", "additionalProperties": {"type": "integer"}}},
+        }
+        rs = vertex._build_config(schema, None)["response_schema"]
+        assert rs["additionalProperties"] is False
+        assert rs["properties"]["scores"]["additionalProperties"] == {"type": "integer"}
+
     def test_all_script_schemas_accepted_by_google_genai_schema(self, backend):
         """集成回归：全部剧本 schema 工厂经 _build_config 产出后必须被真实 types.Schema 接受。
 
