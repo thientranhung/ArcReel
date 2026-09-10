@@ -156,13 +156,14 @@ def test_build_reference_units_split_prompt_injects_episode_outline():
 
 
 def test_build_reference_units_split_prompt_injects_previous_episode_outline():
-    """第二集起注入上集大纲，并要求首个 unit 的口播承接上集预告 / 钩子。"""
+    """第二集起注入上集大纲，并要求首个 unit 用画面承接上集预告 / 钩子——逐字契约下不得新增口播。"""
     prompt = _split_prompt(
         previous_episode_outline={"title": "初入江湖", "hook": "剑断人亡", "next_episode_teaser": "神秘人相救"},
     )
     assert "<previous_episode_outline>" in prompt
     assert "神秘人相救" in prompt
-    assert "承接上集" in prompt
+    assert "画面承接上集" in prompt
+    assert "不得为承接新增任何画外音或台词" in prompt
 
 
 def test_build_reference_units_split_prompt_without_outline_leaves_no_empty_block():
