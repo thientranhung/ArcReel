@@ -1537,6 +1537,39 @@ class TestPatchProjectStyleSetting:
         assert ctx.pm.load_project("demo").get("style") == before
 
 
+class TestPatchProjectAudienceSetting:
+    """settings.audience：自由文本目标受众，空字符串与 null 同义、一律清除。"""
+
+    async def test_set_audience(self, ctx: ToolContext) -> None:
+        out = await _call(patch_project_tool(ctx), {"settings": {"audience": "儿童 6-10 岁"}})
+        assert out.get("is_error") is not True
+        assert ctx.pm.load_project("demo")["audience"] == "儿童 6-10 岁"
+
+    async def test_set_audience_strips_whitespace(self, ctx: ToolContext) -> None:
+        out = await _call(patch_project_tool(ctx), {"settings": {"audience": "  儿童 6-10 岁  "}})
+        assert out.get("is_error") is not True
+        assert ctx.pm.load_project("demo")["audience"] == "儿童 6-10 岁"
+
+    async def test_clear_audience_with_null(self, ctx: ToolContext) -> None:
+        ctx.pm.update_project("demo", lambda project: project.update({"audience": "儿童 6-10 岁"}))
+        out = await _call(patch_project_tool(ctx), {"settings": {"audience": None}})
+        assert out.get("is_error") is not True
+        assert "audience" not in ctx.pm.load_project("demo")
+
+    async def test_clear_audience_with_empty_string(self, ctx: ToolContext) -> None:
+        ctx.pm.update_project("demo", lambda project: project.update({"audience": "儿童 6-10 岁"}))
+        out = await _call(patch_project_tool(ctx), {"settings": {"audience": ""}})
+        assert out.get("is_error") is not True
+        assert "audience" not in ctx.pm.load_project("demo")
+
+    @pytest.mark.parametrize("bad", [1, True, ["x"], {"a": 1}])
+    async def test_invalid_audience_rejected(self, ctx: ToolContext, bad: Any) -> None:
+        before = ctx.pm.load_project("demo").get("audience")
+        out = await _call(patch_project_tool(ctx), {"settings": {"audience": bad}})
+        assert out.get("is_error") is True
+        assert ctx.pm.load_project("demo").get("audience") == before
+
+
 class TestPatchProjectBackendSettings:
     """settings.video_backend / image_provider_t2i / image_provider_i2i：provider/model 校验。"""
 

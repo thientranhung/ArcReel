@@ -106,6 +106,25 @@ class TestProjectsRouter:
             assert "style_image" not in data
             assert "style_description" not in data
 
+    def test_update_project_persists_audience(self, tmp_path, monkeypatch):
+        """PATCH audience：写入目标受众自由文本。"""
+        fake_pm = _FakePM(tmp_path)
+        client = build_projects_client(monkeypatch, fake_pm)
+        with client:
+            resp = client.patch("/api/v1/projects/ready", json={"audience": "儿童 6-10 岁"})
+            assert resp.status_code == 200
+            assert fake_pm.project_data["ready"]["audience"] == "儿童 6-10 岁"
+
+    def test_update_project_clears_audience_with_empty_string(self, tmp_path, monkeypatch):
+        """PATCH audience=""：清除已设的目标受众。"""
+        fake_pm = _FakePM(tmp_path)
+        fake_pm.project_data["ready"]["audience"] = "儿童 6-10 岁"
+        client = build_projects_client(monkeypatch, fake_pm)
+        with client:
+            resp = client.patch("/api/v1/projects/ready", json={"audience": ""})
+            assert resp.status_code == 200
+            assert "audience" not in fake_pm.project_data["ready"]
+
     def test_update_project_persists_narration_overrides(self, tmp_path, monkeypatch):
         """PATCH 旁白配音项目级覆盖：audio_backend / narration_voice / narration_speed 写入 project.json。"""
         fake_pm = _FakePM(tmp_path)

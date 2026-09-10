@@ -137,6 +137,28 @@ class TestPromptUtils:
         without_profiles = {"action": "快步前进", "camera_motion": "Pan Left", "ambiance_audio": "脚步声"}
         assert "Voice_Profiles" not in yaml.safe_load(video_prompt_to_yaml(without_profiles))
 
+    def test_image_prompt_to_yaml_audience_absent_by_default_is_byte_identical(self):
+        data = {"scene": "x", "composition": {"shot_type": "Medium Shot", "lighting": "", "ambiance": ""}}
+        assert image_prompt_to_yaml(data, "Anime") == image_prompt_to_yaml(data, "Anime", audience="")
+
+    def test_image_prompt_to_yaml_places_audience_right_after_style(self):
+        data = {"scene": "x", "composition": {"shot_type": "Medium Shot", "lighting": "", "ambiance": ""}}
+        text = image_prompt_to_yaml(data, "Anime", audience="儿童 6-10 岁")
+        parsed = yaml.safe_load(text)
+        assert list(parsed)[:2] == ["Style", "Audience"]
+        assert parsed["Audience"] == "儿童 6-10 岁"
+
+    def test_video_prompt_to_yaml_audience_absent_by_default_is_byte_identical(self):
+        prompt = {"action": "抬头观察", "camera_motion": "Static", "ambiance_audio": "雨声"}
+        assert video_prompt_to_yaml(prompt) == video_prompt_to_yaml(prompt, audience="")
+
+    def test_video_prompt_to_yaml_audience_leads(self):
+        prompt = {"action": "抬头观察", "camera_motion": "Static", "ambiance_audio": "雨声"}
+        text = video_prompt_to_yaml(prompt, audience="儿童 6-10 岁")
+        parsed = yaml.safe_load(text)
+        assert next(iter(parsed)) == "Audience"
+        assert parsed["Audience"] == "儿童 6-10 岁"
+
 
 def _utterance(speaker: str | None, text: str) -> dict[str, object]:
     return {"kind": "dialogue", "speaker": speaker, "text": text}
@@ -293,6 +315,20 @@ class TestNormalizeVideoPrompt:
         with pytest.raises(ValueError, match=r"prompt(\.action)? must not be empty"):
             normalize_video_prompt(blank)
 
+    def test_audience_absent_by_default_is_byte_identical(self):
+        assert normalize_video_prompt("镜头缓缓推近") == normalize_video_prompt("镜头缓缓推近", audience="")
+
+    def test_text_form_audience_injects_yaml_section(self):
+        rendered = normalize_video_prompt("镜头缓缓推近", audience="儿童 6-10 岁")
+        assert "Audience: 儿童 6-10 岁" in rendered
+
+    def test_structured_form_audience_leads(self):
+        rendered = normalize_video_prompt(
+            {"action": "行走", "camera_motion": "Static", "ambiance_audio": "风声"},
+            audience="儿童 6-10 岁",
+        )
+        assert rendered.startswith("Audience: 儿童 6-10 岁\n")
+
 
 class TestRenderStoryboardVideoPrompt:
     """文本形态的最终渲染出口：正文即提示词主体，drama 的发声声明由渲染层按 utterances 追加。"""
@@ -322,3 +358,18 @@ class TestRenderStoryboardVideoPrompt:
     def test_non_drama_text_form_gets_no_speech_sections(self):
         rendered = self._render("镜头缓缓推近", content_mode="narration")
         assert "Line:" not in rendered
+
+    def test_audience_absent_by_default_is_byte_identical(self):
+        assert self._render("镜头缓缓推近") == render_storyboard_video_prompt(
+            "镜头缓缓推近", self.ITEM, content_mode="drama", voice_characters=self.CHARACTERS, audience=""
+        )
+
+    def test_audience_injects_yaml_section(self):
+        rendered = render_storyboard_video_prompt(
+            "镜头缓缓推近",
+            self.ITEM,
+            content_mode="drama",
+            voice_characters=self.CHARACTERS,
+            audience="儿童 6-10 岁",
+        )
+        assert "Audience: 儿童 6-10 岁" in rendered

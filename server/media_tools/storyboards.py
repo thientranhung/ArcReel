@@ -27,6 +27,7 @@ from lib.generation_result import (
     record_batch_outcomes,
     select_generation_targets,
 )
+from lib.project_audience import project_audience
 from lib.prompt_builders import render_storyboard_image_prompt
 from lib.reference_admission import admit_storyboard_item
 from lib.reference_catalog import build_reference_catalog
@@ -92,11 +93,14 @@ def _build_prompt(
     style: str,
     style_description: str,
     id_field: str,
+    audience: str = "",
 ) -> str:
     image_prompt = segment.get("image_prompt", "")
     if not image_prompt:
         raise ValueError(f"分镜 {segment[id_field]} 缺少 image_prompt 字段")
-    return render_storyboard_image_prompt(image_prompt, style=style, style_description=style_description)
+    return render_storyboard_image_prompt(
+        image_prompt, style=style, style_description=style_description, audience=audience
+    )
 
 
 async def handle_generate_storyboards(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome[Any]:
@@ -150,6 +154,9 @@ async def handle_generate_storyboards(ctx: ToolContext, args: dict[str, Any]) ->
 
         style = project_data.get("style", "")
         style_description = project_data.get("style_description", "")
+        # 原始受众文本一律取显式字段（不走 overview 兜底）：兜底文本是 world_setting/theme 的
+        # 长段拼接，只适合喂给儿童 gear 判定做关键词匹配，不适合作为一行 Audience 原样注入提示词
+        audience = project_audience(project_data) or ""
         # 引用准入与 Web 提交入口同源（``lib.reference_admission``）：未登记的引用与没有
         # 资产图的角色 / 场景 / 道具此前被静默丢弃，agent 会拿到一张少了主体的付费分镜图。
         catalog = build_reference_catalog(project_data)
@@ -172,7 +179,7 @@ async def handle_generate_storyboards(ctx: ToolContext, args: dict[str, Any]) ->
                 )
                 continue
             try:
-                _build_prompt(item, style, style_description, id_field)
+                _build_prompt(item, style, style_description, id_field, audience)
             except (KeyError, TypeError, ValueError) as exc:
                 builder.block(
                     state.unit_id,

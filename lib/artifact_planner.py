@@ -44,6 +44,7 @@ from lib.grid.layout import grid_aspect_ratio_for
 from lib.grid.models import GridGeneration
 from lib.media_artifact_currency import build_current_audio_artifact_basis, build_current_video_artifact_basis
 from lib.narration_delivery import POST_PRODUCTION, USE_TTS
+from lib.project_audience import project_audience
 from lib.project_migration_failure import ProjectMigrationError
 from lib.project_migration_report import MigrationSkippedArtifact
 from lib.project_schema import CURRENT_PROJECT_SCHEMA_VERSION, parse_project_schema_version, project_schema_is_current
@@ -377,6 +378,7 @@ class TargetStatePlanner:
         style_description = self.project.get("style_description", "")
         if not isinstance(style, str) or not isinstance(style_description, str):
             raise ValueError("project visual style fields must be strings")
+        audience = project_audience(self.project) or ""
         for asset_type, spec in ASSET_SPECS.items():
             bucket = self.project.get(spec.bucket_key, {})
             if not isinstance(bucket, Mapping):
@@ -409,6 +411,7 @@ class TargetStatePlanner:
                         style_description=style_description,
                         aspect_ratio="16:9",
                         references=references,
+                        audience=audience,
                     )
                 except (OSError, TypeError, ValueError):
                     continue
@@ -596,6 +599,7 @@ class TargetStatePlanner:
         aspect_ratio = self.project.get("aspect_ratio") or "9:16"
         if not isinstance(style, str) or not isinstance(style_description, str) or not isinstance(aspect_ratio, str):
             raise ValueError("project storyboard style, style description, and aspect ratio must be strings")
+        audience = project_audience(self.project) or ""
         for episode in self.episodes:
             storyboard_items, id_field, char_field, scene_field, prop_field = get_storyboard_items(episode.script)
             grid_members = self._grid_members_by_resource(episode.episode)
@@ -658,6 +662,7 @@ class TargetStatePlanner:
                         style_description=style_description,
                         aspect_ratio=aspect_ratio,
                         references=references,
+                        audience=audience,
                     )
                 except (OSError, TypeError, ValueError):
                     continue

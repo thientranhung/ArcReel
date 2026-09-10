@@ -84,13 +84,20 @@ _NEGATIVE_TAIL_STORYBOARD = yaml_section({AVOID_KEY: STORYBOARD_AVOID_ITEMS})
 _NEGATIVE_TAIL_VIDEO = yaml_section({AVOID_KEY: VIDEO_AVOID_ITEMS})
 
 
-def _style_prefix(style: str = "", style_description: str = "") -> str:
-    """组合视觉风格前缀。两者都为空时返回空串。"""
+def _style_prefix(style: str = "", style_description: str = "", audience: str = "") -> str:
+    """组合视觉风格前缀。三者都为空时返回空串。
+
+    ``audience`` 是原始受众文本（未经 ``render_audience_section`` 的 gear 判定），单行「目标受众：…」，
+    与风格前缀同段落——资产图 prompt 无「视觉规则」这类长段落结构，不适合插入完整 gear 规则块，
+    只注入受众信息本身供模型据此调整画风（如儿童向配色更明亮）。空则不渲染，与不带该参数时逐字相同。
+    """
     parts = []
     if style:
         parts.append(f"风格：{style}")
     if style_description:
         parts.append(f"描述：{style_description}")
+    if audience and audience.strip():
+        parts.append(f"目标受众：{audience.strip()}")
     if not parts:
         return ""
     return "\n".join(parts) + "\n\n"
@@ -101,9 +108,11 @@ def _style_prefix(style: str = "", style_description: str = "") -> str:
 # ---------------------------------------------------------------------------
 
 
-def build_character_prompt(name: str, description: str, style: str = "", style_description: str = "") -> str:
+def build_character_prompt(
+    name: str, description: str, style: str = "", style_description: str = "", audience: str = ""
+) -> str:
     """角色资产图 prompt（三视图 16:9）。"""
-    style_block = _style_prefix(style, style_description)
+    style_block = _style_prefix(style, style_description, audience)
     return (
         f"{style_block}"
         f"角色「{name}」的资产图。\n\n"
@@ -123,9 +132,11 @@ def build_character_derivative_prompt(description: str) -> str:
     return f"{description}\n\n{_CHARACTER_DERIVATIVE_GUARD}\n\n{_NEGATIVE_TAIL_CHARACTER}"
 
 
-def build_scene_prompt(name: str, description: str, style: str = "", style_description: str = "") -> str:
+def build_scene_prompt(
+    name: str, description: str, style: str = "", style_description: str = "", audience: str = ""
+) -> str:
     """场景资产图 prompt（单图）。"""
-    style_block = _style_prefix(style, style_description)
+    style_block = _style_prefix(style, style_description, audience)
     return (
         f"{style_block}"
         f"场景「{name}」的资产图。\n\n"
@@ -136,9 +147,11 @@ def build_scene_prompt(name: str, description: str, style: str = "", style_descr
     )
 
 
-def build_prop_prompt(name: str, description: str, style: str = "", style_description: str = "") -> str:
+def build_prop_prompt(
+    name: str, description: str, style: str = "", style_description: str = "", audience: str = ""
+) -> str:
     """道具资产图 prompt（单图）。"""
-    style_block = _style_prefix(style, style_description)
+    style_block = _style_prefix(style, style_description, audience)
     guard_block = f"{_PROP_GUARD}\n\n" if _PROP_GUARD else ""
     return (
         f"{style_block}"
@@ -178,6 +191,7 @@ def render_storyboard_image_prompt(
     style: str = "",
     style_description: str = "",
     references: Sequence[ReferenceImageSlot] = (),
+    audience: str = "",
 ) -> str:
     """分镜图最终提示词文本的唯一出口。
 
@@ -186,21 +200,29 @@ def render_storyboard_image_prompt(
     是实际随请求发出的参考图列表（编排层最终装配序），其位置即「图N」编号：类型声明行
     ``Reference_Images`` 插在 ``Style`` 与 ``Scene`` 之间，正文的 ``@[名称]`` 换成对应编号、对不上
     的渲染为裸名；没有参考图就没有声明行。商品参考图的保真要求并入声明行。
+
+    ``audience`` 是目标受众原始文本，非空时紧跟在 ``Style`` 之后注入 ``Audience`` 键（结构形态）
+    或 ``Audience: ...`` 行（文本形态）；空则不注入，与不带该参数时逐字相同。
     """
 
     if not is_str(style_description):
         raise TypeError("style_description must be a string")
     projected, normalized_style = project_storyboard_image_prompt(image_prompt, style)
     declaration = reference_images_declaration(references)
+    normalized_audience = audience.strip()
 
     style_parts: list[str] = []
     if isinstance(projected, dict):
         projected["scene"] = render_reference_mentions(projected["scene"], references)
-        rendered = image_prompt_to_yaml(projected, normalized_style, reference_images=declaration).rstrip()
+        rendered = image_prompt_to_yaml(
+            projected, normalized_style, reference_images=declaration, audience=normalized_audience
+        ).rstrip()
     else:
         rendered = render_reference_mentions(projected, references)
         if normalized_style:
             style_parts.append(f"Style: {normalized_style}")
+        if normalized_audience:
+            style_parts.append(f"Audience: {normalized_audience}")
     normalized_description = style_description.strip()
     if normalized_description:
         style_parts.append(f"Visual style: {normalized_description}")

@@ -401,6 +401,38 @@ class TestAudienceGearWiring:
     def test_drama_prompt_authoring_ignores_adult_audience(self):
         assert "面向儿童" not in self._drama_prompt_authoring_prompt(audience="adult drama")
 
+    def _narration_prompt(self, **overrides) -> str:
+        kwargs = {
+            "project_overview": {"synopsis": "故事", "genre": "悬疑", "theme": "真相", "world_setting": "古代"},
+            "style": "古风",
+            "style_description": "cinematic",
+            "characters": {},
+            "scenes": {},
+            "props": {},
+            "script_plan_segments": [
+                {
+                    "segment_id": "E1S01",
+                    "novel_text": "她推开祠堂的门。",
+                    "duration_seconds": 6,
+                    "segment_break": True,
+                }
+            ],
+            "aspect_ratio": "9:16",
+            "episode": 1,
+        }
+        kwargs.update(overrides)
+        return build_narration_prompt(**kwargs)
+
+    def test_narration_prompt_has_no_audience_block_by_default(self):
+        assert "面向儿童" not in self._narration_prompt()
+
+    def test_narration_prompt_renders_kids_gear_when_audience_indicates_children(self):
+        prompt = self._narration_prompt(audience="儿童 6-10 岁")
+        assert "面向儿童（约 6-10 岁）观众的创作规则" in prompt
+
+    def test_narration_prompt_ignores_adult_audience(self):
+        assert "面向儿童" not in self._narration_prompt(audience="都市情感，成年观众")
+
 
 class TestOverviewPrompt:
     """source_kind=screenplay 下 overview prompt 翻为「提取优先」：作者写下的创作方案前言优先照用、

@@ -58,6 +58,7 @@ from lib.narration_delivery import (
     video_request_requires_exact_quote,
     video_request_reuses_current_visual,
 )
+from lib.project_audience import project_audience
 from lib.prompt_utils import (
     is_structured_video_prompt,
     render_storyboard_video_prompt,
@@ -804,7 +805,11 @@ def speech_admission_ticket(unit_id: str, exc: SpeechAdmissionError) -> UnitAdmi
 
 
 def storyboard_video_prompt(
-    item: dict[str, Any], *, content_mode: str, voice_characters: dict[str, Any] | None = None
+    item: dict[str, Any],
+    *,
+    content_mode: str,
+    voice_characters: dict[str, Any] | None = None,
+    audience: str = "",
 ) -> str:
     prompt = item.get("video_prompt")
     if not prompt:
@@ -818,7 +823,9 @@ def storyboard_video_prompt(
         raise TypeError(f"分镜 video_prompt 类型无效（期望 str 或 dict）: {item_id}")
     # 与执行路径共用 render_storyboard_video_prompt：入队快照与实发文本同构，反向约束尾词
     # 由该出口统一追加（执行期对已带尾词的字符串幂等）。
-    return render_storyboard_video_prompt(prompt, item, content_mode=content_mode, voice_characters=voice_characters)
+    return render_storyboard_video_prompt(
+        prompt, item, content_mode=content_mode, voice_characters=voice_characters, audience=audience
+    )
 
 
 async def resolve_voice_context(project: dict[str, Any], content_mode: str) -> dict[str, Any] | None:
@@ -928,7 +935,12 @@ def build_storyboard_video_specs(
             continue
 
         try:
-            prompt = storyboard_video_prompt(item, content_mode=content_mode, voice_characters=voice_characters)
+            prompt = storyboard_video_prompt(
+                item,
+                content_mode=content_mode,
+                voice_characters=voice_characters,
+                audience=project_audience(project) or "",
+            )
         except Exception as exc:
             refused.append(
                 refused_ticket(

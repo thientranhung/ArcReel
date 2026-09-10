@@ -26,6 +26,16 @@ class TestCharacterPrompt:
         assert "古风" in prompt
         assert "Cinematic, low-key lighting" in prompt
 
+    def test_audience_absent_by_default_is_byte_identical(self):
+        with_default = build_character_prompt("姜月茴", "黑发，冷静神态。", style="古风")
+        with_explicit_empty = build_character_prompt("姜月茴", "黑发，冷静神态。", style="古风", audience="")
+        assert with_default == with_explicit_empty
+        assert "目标受众" not in with_default
+
+    def test_audience_injects_raw_line_next_to_style(self):
+        prompt = build_character_prompt("姜月茴", "黑发，冷静神态。", style="古风", audience="儿童 6-10 岁")
+        assert "目标受众：儿童 6-10 岁" in prompt
+
 
 class TestScenePromptAndPropPrompt:
     def test_prop_includes_supplied_details(self):
@@ -40,6 +50,15 @@ class TestScenePromptAndPropPrompt:
 
     def test_empty_prop_guard_does_not_add_a_blank_paragraph(self):
         assert "\n\n\n" not in build_prop_prompt("玉佩", "古朴温润")
+
+    def test_scene_audience_injects_raw_line(self):
+        prompt = build_scene_prompt("祠堂", "昏暗古朴", audience="儿童 6-10 岁")
+        assert "目标受众：儿童 6-10 岁" in prompt
+
+    def test_prop_audience_absent_by_default_is_byte_identical(self):
+        with_default = build_prop_prompt("玉佩", "古朴温润")
+        with_explicit_empty = build_prop_prompt("玉佩", "古朴温润", audience="")
+        assert with_default == with_explicit_empty
 
 
 class TestFigureExclusion:
@@ -204,3 +223,22 @@ class TestRenderStoryboardImagePrompt:
             render_storyboard_image_prompt(once, style="Anime", style_description="cinematic", references=references)
             == once
         )
+
+    def test_audience_absent_by_default_is_byte_identical(self):
+        with_default = render_storyboard_image_prompt(_STRUCTURED, style="Anime")
+        with_explicit_empty = render_storyboard_image_prompt(_STRUCTURED, style="Anime", audience="")
+        assert with_default == with_explicit_empty
+        assert "Audience" not in with_default
+
+    def test_structured_prompt_audience_line_follows_style(self):
+        rendered = render_storyboard_image_prompt(_STRUCTURED, style="Anime", audience="儿童 6-10 岁")
+        assert rendered.startswith("Style: Anime\nAudience: 儿童 6-10 岁\n")
+
+    def test_text_form_audience_line_follows_style(self):
+        rendered = render_storyboard_image_prompt("@[林清]坐在窗边木桌前", style="Anime", audience="儿童 6-10 岁")
+        assert "Style: Anime\n" in rendered
+        assert "Audience: 儿童 6-10 岁\n" in rendered
+
+    def test_rendering_a_rendered_text_again_with_audience_is_idempotent(self):
+        once = render_storyboard_image_prompt(_STRUCTURED, style="Anime", audience="儿童 6-10 岁")
+        assert render_storyboard_image_prompt(once, style="Anime", audience="儿童 6-10 岁") == once

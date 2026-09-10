@@ -119,8 +119,14 @@ def build_asset_sheet_visual_basis(
     style_description: str,
     aspect_ratio: str,
     references: Sequence[VisualReference] = (),
+    audience: str = "",
 ) -> ArtifactBasis:
-    """Describe one character, scene, prop, or product design sheet."""
+    """Describe one character, scene, prop, or product design sheet.
+
+    ``audience`` is the raw project audience text; like ``style``, it is excluded from
+    ``product`` (which stays visually neutral) and only enters the basis when non-empty,
+    so existing projects without the field stay byte-identical and do not go stale.
+    """
 
     if asset_type not in ASSET_TYPES:
         raise ValueError(f"unsupported asset type: {asset_type!r}")
@@ -129,6 +135,7 @@ def build_asset_sheet_visual_basis(
     _require_non_empty("description", normalized_description)
     _require_string("style", style)
     _require_string("style_description", style_description)
+    _require_string("audience", audience)
     canvas_ratio = _require_non_empty("aspect_ratio", aspect_ratio)
     inputs: dict[str, object] = {
         "asset": {
@@ -144,6 +151,8 @@ def build_asset_sheet_visual_basis(
             "name": style,
             "description": style_description,
         }
+        if normalized_audience := audience.strip():
+            inputs["audience"] = normalized_audience
     return ArtifactBasis.build(
         "artifact-visual/asset-sheet",
         kind_version=1,
@@ -159,12 +168,19 @@ def build_storyboard_image_visual_basis(
     aspect_ratio: str,
     style_description: str = "",
     references: Sequence[VisualReference] = (),
+    audience: str = "",
 ) -> ArtifactBasis:
-    """Describe one ordinary storyboard image and its actual ordered image inputs."""
+    """Describe one ordinary storyboard image and its actual ordered image inputs.
+
+    ``audience`` is the raw project audience text (no gear expansion); it only enters the
+    basis when non-empty, so existing projects without the field stay byte-identical and do
+    not go stale.
+    """
 
     identity = _require_non_empty("resource_id", resource_id)
     _require_string("style", style)
     _require_string("style_description", style_description)
+    _require_string("audience", audience)
     if image_prompt is None:
         raise ValueError("image_prompt is pending; a storyboard image has no visual basis yet")
     prompt, style_input = project_storyboard_image_prompt(image_prompt, style)
@@ -178,6 +194,8 @@ def build_storyboard_image_visual_basis(
         inputs["style"] = style_input
     if normalized_description := style_description.strip():
         inputs["style_description"] = normalized_description
+    if normalized_audience := audience.strip():
+        inputs["audience"] = normalized_audience
     return ArtifactBasis.build(
         "artifact-visual/storyboard-image",
         kind_version=1,
@@ -356,6 +374,7 @@ def build_reference_video_artifact_visual_basis(
     request_assets: Sequence[ResolvedReferenceAsset],
     style: str | None,
     aspect_ratio: str,
+    audience: str | None = None,
 ) -> ArtifactBasis:
     """Describe one canonical ``video_unit`` and the images actually sent for it.
 
@@ -363,6 +382,10 @@ def build_reference_video_artifact_visual_basis(
     never enter the basis, so rewording a line of dialogue does not make a rendered video
     stale. ``request_assets`` must be the already-clamped request projection, so
     unavailable or provider-truncated declarations cannot make the formal video stale.
+
+    ``audience`` is the raw project audience text; like ``style``, it drives
+    prompt_authoring's expanded prompt, but only enters the basis when non-empty so
+    existing projects without the field stay byte-identical and do not go stale.
     """
 
     unit_id = _require_non_empty("unit.unit_id", unit.get("unit_id"))
@@ -380,16 +403,19 @@ def build_reference_video_artifact_visual_basis(
         )
         for asset in request_assets
     ]
+    inputs: dict[str, object] = {
+        "unit_id": unit_id,
+        "visual_lines": visual_lines,
+        "style": normalize_style(style),
+        "canvas": {"aspect_ratio": _require_non_empty("aspect_ratio", aspect_ratio)},
+        "request_references": _reference_evidence(references),
+    }
+    if isinstance(audience, str) and (normalized_audience := audience.strip()):
+        inputs["audience"] = normalized_audience
     return ArtifactBasis.build(
         "artifact-visual/video-reference",
         kind_version=1,
-        inputs={
-            "unit_id": unit_id,
-            "visual_lines": visual_lines,
-            "style": normalize_style(style),
-            "canvas": {"aspect_ratio": _require_non_empty("aspect_ratio", aspect_ratio)},
-            "request_references": _reference_evidence(references),
-        },
+        inputs=inputs,
     )
 
 

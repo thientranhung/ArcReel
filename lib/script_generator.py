@@ -656,6 +656,7 @@ class ScriptGenerator:
                 aspect_ratio=self._resolve_aspect_ratio(),
                 episode=episode,
                 target_language=self.project_json.get("source_language") or "中文",
+                audience=resolve_project_audience_text(self.project_json),
             )
             # prompt_authoring 只产引用语法正文：unit_id / 时长机械沿用 script_plan，参考图执行期从正文派生，
             # 不进 LLM 输出——没让模型写的字段就没有漂移可校验，故此处无需按能力收窄的动态 schema。
@@ -690,6 +691,7 @@ class ScriptGenerator:
                 episode=episode,
                 # 输出语言与 script_plan 同取项目 source_language，避免非中文项目 script_plan 透传内容与 prompt_authoring 视觉割裂（同 drama）
                 target_language=self.project_json.get("source_language") or "中文",
+                audience=resolve_project_audience_text(self.project_json),
             )
             # prompt_authoring 只产视觉层（image_prompt/video_prompt），按 segment_id 对齐 script_plan 合并；
             # novel_text/时长/break 由 script_plan 透传，不进 LLM 输出，从工程上根除扩写漂移。
@@ -1332,6 +1334,7 @@ class ScriptGenerator:
                 aspect_ratio=self._resolve_aspect_ratio(),
                 episode=episode,
                 target_language=self.project_json.get("source_language") or "中文",
+                audience=resolve_project_audience_text(self.project_json),
             )
             return append_user_instructions(prompt, instructions)
         # narration 两段式：script_plan 透传内容层（novel_text 等），prompt_authoring 仅产视觉层。
@@ -1357,6 +1360,7 @@ class ScriptGenerator:
             aspect_ratio=self._resolve_aspect_ratio(),
             episode=episode,
             target_language=self.project_json.get("source_language") or "中文",
+            audience=resolve_project_audience_text(self.project_json),
         )
         return append_user_instructions(prompt, instructions)
 

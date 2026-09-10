@@ -154,6 +154,8 @@ export function ProjectSettingsPage() {
   const [audioBackend, setAudioBackend] = useState<string>("");
   const [narrationVoice, setNarrationVoice] = useState<string>("");
   const [narrationSpeed, setNarrationSpeed] = useState<number | null>(null);
+  // 目标受众：自由文本，空 = 未设（提示词层不渲染受众专属规则）
+  const [audience, setAudience] = useState<string>("");
   // 角色声音绑定方式：参考生视频路线专有；缺省即默认档（提示词软约束）
   const [voiceBinding, setVoiceBinding] = useState<CharacterVoiceBinding>(DEFAULT_CHARACTER_VOICE_BINDING);
   const [textDefault, setTextDefault] = useState<string>("");
@@ -216,6 +218,7 @@ export function ProjectSettingsPage() {
     imageBackendDefault: "", imageBackendT2I: "", imageBackendI2I: "",
     audioOverride: null as boolean | null,
     audioBackend: "", narrationVoice: "", narrationSpeed: null as number | null,
+    audience: "",
     voiceBinding: DEFAULT_CHARACTER_VOICE_BINDING,
     textDefault: "", textSimple: "", textComplex: "",
     aspectRatio: "", gridStoryboard: false,
@@ -300,6 +303,7 @@ export function ProjectSettingsPage() {
       const nv = (project.narration_voice as string | undefined) ?? "";
       const rawSpeed = project.narration_speed;
       const ns = typeof rawSpeed === "number" && Number.isFinite(rawSpeed) ? rawSpeed : null;
+      const aud = (project.audience as string | undefined) ?? "";
       const td = (project.default_text_backend as string | undefined) ?? "";
       const tsi = (project.text_backend_simple as string | undefined) ?? "";
       const tcx = (project.text_backend_complex as string | undefined) ?? "";
@@ -329,6 +333,7 @@ export function ProjectSettingsPage() {
       setAudioBackend(ab);
       setNarrationVoice(nv);
       setNarrationSpeed(ns);
+      setAudience(aud);
       setTextDefault(td);
       setTextSimple(tsi);
       setTextComplex(tcx);
@@ -377,6 +382,7 @@ export function ProjectSettingsPage() {
         imageBackendDefault: ibDefault, imageBackendT2I: ibt2i, imageBackendI2I: ibi2i,
         audioOverride: ao,
         audioBackend: ab, narrationVoice: nv, narrationSpeed: ns,
+        audience: aud,
         voiceBinding: vbind,
         textDefault: td, textSimple: tsi, textComplex: tcx,
         aspectRatio: ar, gridStoryboard: grid, defaultDuration: dd, speechRate: sr,
@@ -441,6 +447,7 @@ export function ProjectSettingsPage() {
     audioBackend !== initialRef.current.audioBackend ||
     narrationVoice !== initialRef.current.narrationVoice ||
     narrationSpeed !== initialRef.current.narrationSpeed ||
+    audience.trim() !== initialRef.current.audience ||
     voiceBinding !== initialRef.current.voiceBinding ||
     textDefault !== initialRef.current.textDefault ||
     textSimple !== initialRef.current.textSimple ||
@@ -584,6 +591,7 @@ export function ProjectSettingsPage() {
       // 后端按执行模型查这张表，键位对不上分辨率会被静默忽略。
       // 音色与后端 .strip() 对齐：保存时去首尾空白，避免本地基线带空格而磁盘值不带导致 isDirty 误报
       const trimmedVoice = narrationVoice.trim();
+      const trimmedAudience = audience.trim();
       const executingVideo = executingVideoModel(
         { videoBackend, videoProviderI2V, videoProviderR2V },
         globalDefaults,
@@ -609,6 +617,7 @@ export function ProjectSettingsPage() {
         audio_backend: audioBackend || null,
         narration_voice: trimmedVoice || null,
         narration_speed: narrationSpeed,
+        audience: trimmedAudience,
         // 绑定方式只在参考生视频路线上有效，其余路线该键与项目无关，不写
         ...(generationRoute === "reference_video" ? { character_voice_binding: voiceBinding } : {}),
         // null 即清除项目级覆盖、回退语言默认
@@ -630,10 +639,12 @@ export function ProjectSettingsPage() {
       });
       setModelSettings(newModelSettings);
       setNarrationVoice(trimmedVoice);
+      setAudience(trimmedAudience);
       initialRef.current = {
         videoBackend, videoProviderI2V, videoProviderR2V,
         imageBackendDefault, imageBackendT2I, imageBackendI2I, audioOverride,
         audioBackend, narrationVoice: trimmedVoice, narrationSpeed,
+        audience: trimmedAudience,
         voiceBinding,
         textDefault, textSimple, textComplex,
         aspectRatio, gridStoryboard, defaultDuration, speechRate,
@@ -649,7 +660,7 @@ export function ProjectSettingsPage() {
     } finally {
       setSaving(false);
     }
-  }, [modelSettings, videoBackend, videoProviderI2V, videoProviderR2V, imageBackendDefault, imageBackendT2I, imageBackendI2I, audioOverride, audioBackend, narrationVoice, narrationSpeed, voiceBinding, textDefault, textSimple, textComplex, aspectRatio, generationRoute, gridStoryboard, gridToggleVisible, defaultDuration, speechRate, episodeTargetDuration, contentMode, videoResolution, imageResolution, projectName, t, globalDefaults]);
+  }, [modelSettings, videoBackend, videoProviderI2V, videoProviderR2V, imageBackendDefault, imageBackendT2I, imageBackendI2I, audioOverride, audioBackend, narrationVoice, narrationSpeed, audience, voiceBinding, textDefault, textSimple, textComplex, aspectRatio, generationRoute, gridStoryboard, gridToggleVisible, defaultDuration, speechRate, episodeTargetDuration, contentMode, videoResolution, imageResolution, projectName, t, globalDefaults]);
 
   const handleResetAgentProfile = useCallback(async () => {
     if (profileResetProject !== projectName) {
@@ -1050,6 +1061,26 @@ export function ProjectSettingsPage() {
                     />
                   </div>
                 )}
+              </SectionCard>
+
+              {/* 目标受众：自由文本，注入脚本 / 资产 / 分镜 / 视频 prompt；空 = 未设，
+                  提示词层不渲染受众专属规则块 */}
+              <SectionCard kicker="Audience" title={t("audience_title")} description={t("audience_desc")}>
+                <label
+                  htmlFor="project-audience"
+                  className="mb-1.5 block font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-text-4"
+                >
+                  {t("audience_label")}
+                </label>
+                <input
+                  id="project-audience"
+                  type="text"
+                  value={audience}
+                  onChange={(e) => setAudience(e.target.value)}
+                  placeholder={t("audience_placeholder")}
+                  className="w-full rounded-[8px] border border-hairline bg-bg-grad-a/55 px-3 py-2 text-[12.5px] text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                />
+                <p className="mt-1 text-[11px] text-text-4">{t("audience_hint")}</p>
               </SectionCard>
 
               {/* 角色声音绑定方式：只在参考生视频路线有效——参考音频通道属于该路线，

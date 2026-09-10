@@ -319,15 +319,23 @@ def build_narration_prompt(
     episode: int,
     aspect_ratio: str = "9:16",
     target_language: str = "中文",
+    audience: str | None = None,
 ) -> str:
     """构建旁白/解说模式 prompt_authoring（视觉层）prompt。
 
     script_plan 已定的 novel_text / 时长 / segment_break / 出场角色 / 场景 / 道具按 segment_id
     透传，prompt_authoring 只产 image_prompt 与 video_prompt。``<segments>`` 块为只读上下文，
     LLM 不重出这些字段——novel_text 由此不再经 prompt_authoring 的 LLM 扩写漂移。
+
+    ``audience`` 是解析好的受众文本（见 ``lib.project_audience.resolve_project_audience_text``），
+    经 ``render_audience_section`` 判定是否命中儿童 gear；非儿童受众 / 未设时该函数回空串，
+    prompt 与不带该参数时逐字相同。
     """
     pacing_block = render_pacing_section("narration") + "\n\n"
     segments_block = _format_narration_script_plan_segments(script_plan_segments)
+    audience_block = render_audience_section(audience)
+    if audience_block:
+        audience_block += "\n\n"
 
     return f"""# 角色与任务
 
@@ -338,7 +346,7 @@ def build_narration_prompt(
 **输出语言**：所有字符串值必须使用 {target_language}；JSON 键名 / 枚举值保持英文。
 **结构约束**：字段 / 枚举 / 必填项由 response_schema 强制；本提示只解释**如何写好每个字段的内容**。
 
-{pacing_block}# 上下文
+{pacing_block}{audience_block}# 上下文
 
 <overview>
 {project_overview.get("synopsis", "")}

@@ -97,6 +97,7 @@ from lib.generation_result import (
 )
 from lib.path_safety import safe_join
 from lib.profile_manifest import ContentMode
+from lib.project_audience import PROJECT_AUDIENCE_FIELD
 from lib.project_manager import ProjectManager, ScriptWriteConflict, SourceKind, is_reference_video_project
 from lib.project_migration_failure import (
     MIGRATION_FAILURE_CODE,
@@ -1590,6 +1591,8 @@ ASSET_TABLES = tuple(spec.bucket_key for spec in ASSET_SPECS.values())
 # （server.routers._validators.validate_backend_value）。历史单字段 image_backend 已废弃
 # （lib.project_manager 数据层拒写,ADR 0054 任务类型桶拆分为 t2i/i2i），因此这里只收拆分后的
 # 两个桶字段，不提供 image_backend 别名。
+# audience: 目标受众自由文本（如「儿童 6-10 岁」），无固定枚举；空字符串按「清除」处理（与 null
+# 同义，字段从 project.json 移除），非空字符串去首尾空白后落盘。见 lib.project_audience。
 PROJECT_SETTINGS = (
     EPISODE_TARGET_UNITS_FIELD,
     EPISODE_TARGET_DURATION_FIELD,
@@ -1604,6 +1607,7 @@ PROJECT_SETTINGS = (
     "video_backend",
     "image_provider_t2i",
     "image_provider_i2i",
+    PROJECT_AUDIENCE_FIELD,
 )
 PROJECT_OVERVIEW_FIELDS = ("synopsis", "genre", "theme", "world_setting")
 EPISODE_META_FIELDS = ("title",)
@@ -2160,6 +2164,13 @@ def _coerce_setting_value(key: str, value: Any) -> Any:
                 "（自定义供应商用 custom-<id> 前缀）"
             ) from exc
         return value
+    if key == PROJECT_AUDIENCE_FIELD:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError(f"{PROJECT_AUDIENCE_FIELD} 必须是字符串或 null,收到 {value!r}")
+        stripped = value.strip()
+        return stripped or None
     raise ValueError(f"settings 字段 {key!r} 缺类型校验")
 
 
