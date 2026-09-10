@@ -11,6 +11,7 @@ import respx
 
 from lib.video_backends.ark import ArkVideoBackend
 from lib.video_backends.base import (
+    ProviderGenerationFailedError,
     ReferenceAudioMode,
     VideoCapabilityError,
     VideoGenerationRequest,
@@ -279,6 +280,7 @@ class TestArkGenerate:
         ark_backend._client.content_generation.tasks.create.assert_not_called()
 
     async def test_failed_task_raises(self, ark_backend, tmp_path):
+        """``error`` 是裸字符串（无结构化 code）时仍保留历史可读文案，code 落空。"""
         output = tmp_path / "out.mp4"
 
         create_result = MagicMock()
@@ -291,8 +293,59 @@ class TestArkGenerate:
         ark_backend._client.content_generation.tasks.get = MagicMock(return_value=get_result)
 
         request = VideoGenerationRequest(prompt="test", output_path=output)
-        with pytest.raises(RuntimeError, match="Ark 视频生成失败"):
+        with pytest.raises(RuntimeError, match="Ark 视频生成失败") as excinfo:
             await ark_backend.generate(request)
+
+        assert isinstance(excinfo.value, ProviderGenerationFailedError)
+        assert excinfo.value.status == "failed"
+        assert excinfo.value.provider_code is None
+        assert excinfo.value.provider_message == "content violation"
+        assert str(excinfo.value) == "Ark 视频生成失败(status=failed): content violation"
+
+    async def test_failed_task_with_structured_code_carries_provider_code(self, ark_backend, tmp_path):
+        """``error`` 是带 code/message 的结构化对象（Ark SDK ``ContentGenerationError`` 形态）
+        时，机器码与原文分列落在 ``provider_code`` / ``provider_message`` 上。"""
+        output = tmp_path / "out.mp4"
+
+        create_result = MagicMock()
+        create_result.id = "cgt-fail-code"
+        ark_backend._client.content_generation.tasks.create = MagicMock(return_value=create_result)
+
+        error = MagicMock()
+        error.code = "OutputVideoSensitiveContentDetected"
+        error.message = "generated video flagged by content safety"
+        get_result = MagicMock()
+        get_result.status = "failed"
+        get_result.error = error
+        ark_backend._client.content_generation.tasks.get = MagicMock(return_value=get_result)
+
+        request = VideoGenerationRequest(prompt="test", output_path=output)
+        with pytest.raises(ProviderGenerationFailedError) as excinfo:
+            await ark_backend.generate(request)
+
+        assert excinfo.value.status == "failed"
+        assert excinfo.value.provider_code == "OutputVideoSensitiveContentDetected"
+        assert excinfo.value.provider_message == "generated video flagged by content safety"
+
+    async def test_expired_task_status_string_is_preserved(self, ark_backend, tmp_path):
+        """``status=expired`` 仍要出现在异常消息里：``_is_ark_not_found`` 靠这个子串识别过期。"""
+        output = tmp_path / "out.mp4"
+
+        create_result = MagicMock()
+        create_result.id = "cgt-expired"
+        ark_backend._client.content_generation.tasks.create = MagicMock(return_value=create_result)
+
+        get_result = MagicMock()
+        get_result.status = "expired"
+        get_result.error = None
+        ark_backend._client.content_generation.tasks.get = MagicMock(return_value=get_result)
+
+        request = VideoGenerationRequest(prompt="test", output_path=output)
+        with pytest.raises(ProviderGenerationFailedError) as excinfo:
+            await ark_backend.generate(request)
+
+        assert excinfo.value.status == "expired"
+        assert "status=expired" in str(excinfo.value)
 
     async def test_with_seed_and_flex(self, ark_backend, tmp_path):
         output = tmp_path / "out.mp4"
@@ -369,15 +422,41 @@ class TestArkRetryBehavior:
         # 轮询调用了两次（一次失败 + 一次成功）
         assert ark_backend._client.content_generation.tasks.get.call_count == 2
 
-    async def test_create_retries_on_transient_error(self, ark_backend, tmp_path):
-        """任务创建阶段的瞬态错误应由 @with_retry_async 重试。"""
+    async def test_create_ambiguous_transport_error_does_not_retry(self, ark_backend, tmp_path):
+        """任务创建阶段的歧义态传输错误（SDK 不透传底层 httpx 异常，无法证明未送达）不应自动重试。
+
+        volcenginesdkarkruntime 把 ReadTimeout / 连接中途断开等一律折叠成不带 status_code
+        的异常（ArkAPIConnectionError / ArkAPITimeoutError），本用例用不带 status_code 的
+        ConnectionError 模拟该形态：应终态失败为 AmbiguousSubmitError，create 只调用一次，
+        不重复建任务、不重复计费。
+        """
+        from lib.video_backends.base import AmbiguousSubmitError
+
         output = tmp_path / "out.mp4"
+        ark_backend._client.content_generation.tasks.create = MagicMock(side_effect=ConnectionError("connection reset"))
+
+        request = VideoGenerationRequest(prompt="test", output_path=output)
+        with pytest.raises(AmbiguousSubmitError), bounded_poll_clock():
+            await ark_backend.generate(request)
+
+        assert ark_backend._client.content_generation.tasks.create.call_count == 1
+
+    async def test_create_retries_on_retryable_status_error(self, ark_backend, tmp_path):
+        """任务创建阶段带明确 status_code 的服务端响应（如 5xx）应按 status_code 重试。"""
+        output = tmp_path / "out.mp4"
+
+        class _FakeArkStatusError(Exception):
+            """duck-typing 模拟 ArkAPIStatusError：带 status_code 属性即视为服务端已响应。"""
+
+            def __init__(self, status_code: int):
+                super().__init__(f"status {status_code}")
+                self.status_code = status_code
 
         create_result = MagicMock()
         create_result.id = "cgt-create-retry"
-        # 第一次创建抛 ConnectionError，第二次成功
+        # 第一次创建抛 5xx（服务端已明确响应，非歧义态），第二次成功
         ark_backend._client.content_generation.tasks.create = MagicMock(
-            side_effect=[ConnectionError("connection reset"), create_result]
+            side_effect=[_FakeArkStatusError(500), create_result]
         )
 
         get_result = MagicMock()
@@ -399,7 +478,7 @@ class TestArkRetryBehavior:
             patcher.stop()
 
         assert result.task_id == "cgt-create-retry"
-        # 创建调用了两次（一次失败 + 一次成功）
+        # 创建调用了两次（一次 5xx + 一次成功）
         assert ark_backend._client.content_generation.tasks.create.call_count == 2
 
     async def test_poll_non_retryable_error_propagates(self, ark_backend, tmp_path):

@@ -65,6 +65,11 @@ TransitionType = Literal[
     "dissolve",
 ]
 
+# 分镜级声音归属覆盖：None=沿用整集/项目默认（见 lib.narration_delivery）；
+# "model"=保留供应商视频原声、本分镜不出旁白 TTS；"tts"=优先旁白配音。
+# 具体回退裁决见 lib.narration_delivery.resolve_scene_audio_mode。
+AudioMode = Literal["model", "tts"]
+
 logger = logging.getLogger(__name__)
 
 
@@ -272,6 +277,9 @@ class NarrationSegment(BaseModel):
     # 故不进 generated_assets；只由尾帧设置/清除端点写入（通用 PATCH 白名单不含此字段，
     # 避免绕过快照复制写出悬空引用或越界路径），整集剧本重生成不保留（同 note 口径）。
     end_frame_image: SkipJsonSchema[str | None] = Field(default=None, description="尾帧快照路径（项目内相对路径）")
+    # 用户/编辑侧决定，不参与生成，与 note 同口径隐藏；缺省 None 时合成沿用整集
+    # narration_delivery 请求的默认声音归属（见 lib.narration_delivery.resolve_scene_audio_mode）。
+    audio_mode: SkipJsonSchema[AudioMode | None] = Field(default=None, description="分镜声音归属覆盖（不参与生成）")
     generated_assets: SkipJsonSchema[GeneratedAssets] = Field(
         default_factory=GeneratedAssets, description="生成资源状态"
     )
@@ -528,6 +536,8 @@ class DramaScene(BaseModel):
     # 见 NarrationSegment 同名字段说明。
     note: SkipJsonSchema[str | None] = Field(default=None, description="用户备注（不参与生成）")
     end_frame_image: SkipJsonSchema[str | None] = Field(default=None, description="尾帧快照路径（项目内相对路径）")
+    # 见 NarrationSegment.audio_mode 同名字段说明。
+    audio_mode: SkipJsonSchema[AudioMode | None] = Field(default=None, description="分镜声音归属覆盖（不参与生成）")
     generated_assets: SkipJsonSchema[GeneratedAssets] = Field(
         default_factory=GeneratedAssets, description="生成资源状态"
     )

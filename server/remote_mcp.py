@@ -66,6 +66,7 @@ from server.tool_runtime import (
     PromptPreviewRequest,
     RenameAssetRequest,
     ResetEpisodePlanningRequest,
+    RunVisualQaRequest,
     ScriptPlanConversionRequest,
     Services,
     ToolOutcome,
@@ -104,6 +105,7 @@ from server.tool_runtime import (
     rename_asset,
     reset_episode_planning,
     retry_project_migration,
+    run_visual_qa,
     upload_source,
 )
 
@@ -814,7 +816,12 @@ def build_remote_mcp_server(
         expected_source_revision: str,
         entries: dict[str, Any] | None = None,
     ) -> CallToolResult:
-        """Atomically commit an asset inventory against a source revision."""
+        """Atomically commit an asset inventory against a source revision.
+
+        Each character/scene/prop description must follow the identity rules delivered in
+        get_workflow_plan().next_action.authoring_rules (skin/hair/eye color anchors for
+        characters, spatial anchors for scenes, static-only visuals for props).
+        """
         try:
             project_scope = _project_scope(project, projects)
             request = CompleteAssetInventoryRequest(
@@ -868,6 +875,24 @@ def build_remote_mcp_server(
         return _to_mcp_result(
             "prompt_preview",
             await get_prompt_preview(ToolRequest(request), scope, _authenticated_caller(), services),
+        )
+
+    @server.tool(name="run_visual_qa", structured_output=False)
+    async def remote_run_visual_qa(  # pyright: ignore[reportUnusedFunction]
+        project: str,
+        resource_type: Literal["character", "scene", "prop", "storyboard", "grid"],
+        ids: list[str],
+        script: str | None = None,
+    ) -> CallToolResult:
+        """Review the current image of each id against its expectation; only reads, writes a QA sidecar."""
+        try:
+            scope = _project_scope(project, projects)
+            request = RunVisualQaRequest(resource_type=resource_type, ids=ids, script=script)
+        except (FileNotFoundError, ValueError) as exc:
+            return _to_mcp_result("visual_qa", ToolOutcome(problem=ToolProblem("invalid_request", str(exc))))
+        return _to_mcp_result(
+            "visual_qa",
+            await run_visual_qa(ToolRequest(request), scope, _authenticated_caller(), services),
         )
 
     @server.tool(name="list_source_files", structured_output=False)

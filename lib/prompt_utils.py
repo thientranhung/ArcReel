@@ -19,9 +19,17 @@ logger = logging.getLogger(__name__)
 
 #: 反向约束的 YAML 键：分镜图置于 ``Composition`` 之后，视频置于 ``Dialogue`` 之后。
 AVOID_KEY = "Avoid"
-#: 分镜图与视频的反向条目各自定义，内容相同也不合并（同 ``lib.prompt_builders`` 的资产图反向提示词）。
-STORYBOARD_AVOID_ITEMS = "水印、多余文字、Logo"
-VIDEO_AVOID_ITEMS = "BGM、文字字幕、水印"
+#: 分镜图反向条目：移植自 waoowaoo 的「3 句固定约束」
+#: （见 docs/research/learn-from-waoowaoo-2026-09-10.md §1.3）——禁止字幕/标题/水印类文字与
+#: Logo、禁止拼贴/分屏等非单一画面构图、禁止画面中出现分镜内容未要求的多余人物、禁止人物
+#: 直视镜头（打破第四面墙须由剧本明确要求，不能是默认姿态）。
+STORYBOARD_AVOID_ITEMS = (
+    "水印、多余文字、Logo、字幕、标题、拼贴、分屏、多余人物、人物直视镜头（除非剧本明确打破第四面墙）"
+)
+#: 视频反向条目：在分镜图条目基础上叠加 BGM（视频独有）与转场类反向约束——分镜之间只能
+#: 直切，叠化/交叉溶解/淡入淡出与画面透明叠加都会让 shot-to-shot 连续性判断失真。
+#: 与分镜图共用同一份条目文本是刻意的单一真相源：两者内容相同也不拆成独立常量硬编码。
+VIDEO_AVOID_ITEMS = f"BGM、{STORYBOARD_AVOID_ITEMS}、镜头之间叠化/交叉溶解/淡入淡出、前后画面透明重叠"
 
 # 提示词 YAML 的行宽上限。PyYAML 默认 80 列，超宽的纯量会在 ASCII 空格处折成多行——
 # 英文 / 越南语提示词几乎每个值都超 80 列，折行会把原文塞进换行再喂给供应商。取一个任何
@@ -58,7 +66,9 @@ SHOT_TYPES: list[str] = list(get_args(ShotType))
 CAMERA_MOTIONS: list[str] = list(get_args(CameraMotion))
 
 
-def image_prompt_to_yaml(image_prompt: dict, project_style: str, *, reference_images: str = "") -> str:
+def image_prompt_to_yaml(
+    image_prompt: dict, project_style: str, *, reference_images: str = "", audience: str = ""
+) -> str:
     """
     将 imagePrompt 结构转换为 YAML 格式字符串
 
@@ -75,11 +85,15 @@ def image_prompt_to_yaml(image_prompt: dict, project_style: str, *, reference_im
         project_style: 项目级风格设置（从 project.json 读取）
         reference_images: 参考图类型声明行的值（``lib.reference_image_numbering``），非空时作为
             ``Reference_Images`` 键插在 ``Style`` 与 ``Scene`` 之间
+        audience: 目标受众原始文本，非空时作为 ``Audience`` 键紧跟在 ``Style`` 之后；空则不渲染，
+            与不带该参数时逐字相同
 
     Returns:
-        YAML 格式字符串，键序 Style / Reference_Images / Scene / Composition / Avoid
+        YAML 格式字符串，键序 Style / Audience / Reference_Images / Scene / Composition / Avoid
     """
     ordered: dict[str, Any] = {"Style": normalize_style(project_style)}
+    if audience and audience.strip():
+        ordered["Audience"] = audience.strip()
     if reference_images:
         ordered[REFERENCE_IMAGES_KEY] = reference_images
     ordered["Scene"] = image_prompt["scene"]
@@ -133,7 +147,7 @@ def project_storyboard_image_prompt(image_prompt: object, project_style: str) ->
     )
 
 
-def video_prompt_to_yaml(video_prompt: dict) -> str:
+def video_prompt_to_yaml(video_prompt: dict, *, audience: str = "") -> str:
     """
     将 videoPrompt 结构转换为 YAML 格式字符串
 
@@ -146,6 +160,8 @@ def video_prompt_to_yaml(video_prompt: dict) -> str:
                 "dialogue": [{"speaker": "角色名", "line": "台词"}],
                 "voice_profiles": [{"Speaker": "角色名", "Voice_Style": "声音风格"}]
             }
+        audience: 目标受众原始文本，非空时作为 ``Audience`` 键置于最前（视频提示词无 ``Style`` 键，
+            取图像提示词里 ``Style`` 的同一首位置）；空则不渲染，与不带该参数时逐字相同
 
     Returns:
         YAML 格式字符串，以 ``Avoid`` 反向约束键收尾
@@ -154,6 +170,8 @@ def video_prompt_to_yaml(video_prompt: dict) -> str:
     voice_profiles = video_prompt.get("voice_profiles") or []
 
     ordered: dict[str, Any] = {}
+    if audience and audience.strip():
+        ordered["Audience"] = audience.strip()
     # Voice_Profiles 是集中声明段，须在顶部：调用方已按 dialogue speaker ∩ 非空 voice_style
     # 角色资产派生好列表，此处只负责按序注入，不做二次过滤。
     if voice_profiles:
@@ -170,15 +188,25 @@ def video_prompt_to_yaml(video_prompt: dict) -> str:
     return _dump_prompt_yaml(ordered)
 
 
-def normalize_video_prompt(prompt: object) -> str:
-    """Normalize the exact text sent to a video provider."""
+def normalize_video_prompt(prompt: object, *, audience: str = "") -> str:
+    """Normalize the exact text sent to a video provider.
+
+    ``audience`` 是目标受众原始文本，非空时以 ``Audience`` 键注入（结构形态在
+    ``video_prompt_to_yaml`` 顶部、文本形态追加一段同形 YAML 段）；空则不注入，与不带该参数时
+    逐字相同。
+    """
 
     from lib.prompt_builders import append_video_negative_tail
 
     if isinstance(prompt, str):
-        if not prompt.strip():
+        text = prompt.strip()
+        if not text:
             raise ValueError("prompt must not be empty")
-        return append_video_negative_tail(prompt)
+        if audience and audience.strip():
+            audience_section = yaml_section({"Audience": audience.strip()})
+            if audience_section not in text:
+                text = f"{text}\n\n{audience_section}"
+        return append_video_negative_tail(text)
     if not isinstance(prompt, dict):
         raise ValueError("prompt must be a string or object")
     if not is_structured_video_prompt(prompt):
@@ -209,7 +237,7 @@ def normalize_video_prompt(prompt: object) -> str:
         "dialogue": normalized_dialogue,
         "voice_profiles": prompt.get("voice_profiles") or [],
     }
-    return append_video_negative_tail(video_prompt_to_yaml(normalized_prompt).rstrip())
+    return append_video_negative_tail(video_prompt_to_yaml(normalized_prompt, audience=audience).rstrip())
 
 
 def render_storyboard_video_prompt(
@@ -218,6 +246,7 @@ def render_storyboard_video_prompt(
     *,
     content_mode: str,
     voice_characters: dict[str, Any] | None,
+    audience: str = "",
 ) -> str:
     """分镜生视频最终提示词文本的唯一出口。
 
@@ -227,6 +256,10 @@ def render_storyboard_video_prompt(
 
     文本形态下条目正文即提示词主体，不套结构模板；drama 的发声序列仍由脚本规划的
     ``utterances`` 决定——正文不承载台词，台词与声音风格由本函数按同一门控追加到正文之后。
+
+    ``audience`` 是目标受众原始文本（非儿童 gear 判定后的文本，调用方直接传项目 ``audience``
+    字段的解析结果），非空时透传给 ``normalize_video_prompt`` 注入 ``Audience`` 键；空则不注入，
+    与不带该参数时逐字相同。
     """
 
     if isinstance(prompt, dict):
@@ -240,7 +273,7 @@ def render_storyboard_video_prompt(
                 prompt = build_drama_video_prompt_from_legacy_dialogue(prompt, characters=voice_characters)
     elif isinstance(prompt, str) and content_mode == "drama":
         prompt = _attach_drama_speech_text(prompt, item, characters=voice_characters)
-    return normalize_video_prompt(prompt)
+    return normalize_video_prompt(prompt, audience=audience)
 
 
 def _attach_drama_speech_text(text: str, item: Mapping[str, Any] | None, *, characters: dict[str, Any] | None) -> str:

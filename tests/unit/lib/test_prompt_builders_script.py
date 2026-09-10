@@ -11,6 +11,7 @@ from lib.prompt_builders_script import (
     render_drama_content_for_prompt_authoring,
 )
 from lib.prompt_rules.episode_pacing import render_pacing_section
+from lib.prompt_rules.shot_continuity import render_shot_continuity_rules
 from lib.speech_rate import speech_rate_units_per_second
 
 
@@ -327,9 +328,173 @@ class TestScreenplaySourceKind:
         assert "<previous_episode_outline>" not in prompt
         assert "承接上集" not in prompt
 
+    def _exit_state(self, **overrides) -> dict:
+        base = {
+            "scene_id": "E1S02",
+            "location": ["山洞"],
+            "characters_present": ["张三", "李四"],
+            "props": ["火把"],
+            "last_utterance": {"speaker": "张三", "text": "我们到了。"},
+            "last_action": "张三举起火把环顾四周",
+        }
+        base.update(overrides)
+        return base
+
+    def test_normalize_includes_previous_episode_exit_state_block(self):
+        # 退出态块紧跟在 <previous_episode_outline> 之后、<episode_outline> 之前
+        prompt = self._normalize_prompt(
+            "novel",
+            episode=2,
+            previous_episode_outline={"title": "初入江湖", "next_episode_teaser": "神秘人相救"},
+            previous_episode_exit_state=self._exit_state(),
+            episode_outline={"title": "绝处逢生", "story_beats": ["疗伤"]},
+        )
+        outline_idx = prompt.index("<previous_episode_outline>")
+        exit_state_idx = prompt.index("<previous_episode_exit_state>")
+        episode_outline_idx = prompt.index("<episode_outline>")
+        assert outline_idx < exit_state_idx < episode_outline_idx
+        assert "山洞" in prompt
+        assert "张三" in prompt
+        assert "李四" in prompt
+        assert "火把" in prompt
+        assert "张三举起火把环顾四周" in prompt
+        assert "我们到了。" in prompt
+        assert "入场状态" in prompt
+
+    def test_normalize_exit_state_block_independent_of_outline(self):
+        # 退出态块不依赖上集大纲存在：无大纲时仍渲染
+        prompt = self._normalize_prompt(
+            "novel",
+            episode=2,
+            previous_episode_exit_state=self._exit_state(),
+        )
+        assert "<previous_episode_outline>" not in prompt
+        assert "<previous_episode_exit_state>" in prompt
+        assert "入场状态" in prompt
+
+    def test_screenplay_exit_state_reuses_visual_only_bridge_wording(self):
+        # screenplay 模式下退出态与上集大纲共用同一条「scene_description-only / 不新增口播」引导，
+        # 不重复出现两次。
+        prompt = self._normalize_prompt(
+            "screenplay",
+            episode=2,
+            previous_episode_outline={"title": "初入江湖", "next_episode_teaser": "神秘人相救"},
+            previous_episode_exit_state=self._exit_state(),
+        )
+        assert "<previous_episode_exit_state>" in prompt
+        assert prompt.count("不得为承接新增任何画外音或台词") == 1
+        assert "入场状态" not in prompt
+
+    def test_normalize_without_previous_exit_state_has_no_block(self):
+        prompt = self._normalize_prompt("novel", episode=2)
+        assert "<previous_episode_exit_state>" not in prompt
+        assert "入场状态" not in prompt
+
     def test_normalize_injects_pacing(self):
         # script_plan（normalize）与 prompt_authoring 一样无条件注入节奏建议，二者共享同一份 render_pacing_section("drama")
         assert self._squash(render_pacing_section("drama")) in self._squash(self._normalize_prompt("novel"))
+
+
+class TestAudienceGearWiring:
+    """受众 gear 区块在 build_normalize_prompt 与 build_drama_prompt 两条 drama prompt 中的接入。"""
+
+    def _normalize_prompt(self, **overrides) -> str:
+        kwargs = {
+            "novel_text": "【第1集】角色甲：「你好」",
+            "project_overview": {"synopsis": "S", "genre": "G", "theme": "T", "world_setting": "W"},
+            "style": "动漫",
+            "characters": {"角色甲": {}},
+            "scenes": {},
+            "props": {},
+            "default_duration": 8,
+            "supported_durations": [4, 6, 8],
+            "episode": 1,
+        }
+        kwargs.update(overrides)
+        return build_normalize_prompt(**kwargs)
+
+    def _drama_prompt_authoring_prompt(self, **overrides) -> str:
+        kwargs = {
+            "project_overview": {"synopsis": "动作", "genre": "动作", "theme": "成长", "world_setting": "近未来"},
+            "style": "赛博",
+            "style_description": "high contrast",
+            "scenes_content": "### E1S01（时长 8 秒）\n视觉改编：天台追逐",
+            "episode": 1,
+            "aspect_ratio": "16:9",
+        }
+        kwargs.update(overrides)
+        return build_drama_prompt(**kwargs)
+
+    def test_normalize_prompt_has_no_audience_block_by_default(self):
+        assert "面向儿童" not in self._normalize_prompt()
+
+    def test_normalize_prompt_renders_kids_gear_when_audience_indicates_children(self):
+        prompt = self._normalize_prompt(audience="儿童 6-10 岁")
+        assert "面向儿童（约 6-10 岁）观众的创作规则" in prompt
+        assert "jump-scare" in prompt
+
+    def test_normalize_prompt_ignores_adult_audience(self):
+        assert "面向儿童" not in self._normalize_prompt(audience="都市情感，成年观众")
+
+    def test_normalize_prompt_renders_when_caller_resolves_overview_fallback(self):
+        """build_normalize_prompt 本身不读 project.json——退回 overview 文本是调用方
+        （lib.project_audience.resolve_project_audience_text）的职责；这里断言二者接得上：
+        调用方解析出的文本原样传入后，儿童 gear 正常渲染。"""
+        from lib.project_audience import resolve_project_audience_text
+
+        project = {"overview": {"world_setting": "面向儿童 6-10 岁的睡前故事", "theme": "友谊"}}
+        prompt = self._normalize_prompt(
+            project_overview={
+                "synopsis": "S",
+                "genre": "G",
+                "theme": "T",
+                "world_setting": "面向儿童 6-10 岁的睡前故事",
+            },
+            audience=resolve_project_audience_text(project),
+        )
+        assert "面向儿童（约 6-10 岁）观众的创作规则" in prompt
+
+    def test_drama_prompt_authoring_has_no_audience_block_by_default(self):
+        assert "面向儿童" not in self._drama_prompt_authoring_prompt()
+
+    def test_drama_prompt_authoring_renders_kids_gear_when_audience_indicates_children(self):
+        prompt = self._drama_prompt_authoring_prompt(audience="kids 6-10")
+        assert "面向儿童（约 6-10 岁）观众的创作规则" in prompt
+
+    def test_drama_prompt_authoring_ignores_adult_audience(self):
+        assert "面向儿童" not in self._drama_prompt_authoring_prompt(audience="adult drama")
+
+    def _narration_prompt(self, **overrides) -> str:
+        kwargs = {
+            "project_overview": {"synopsis": "故事", "genre": "悬疑", "theme": "真相", "world_setting": "古代"},
+            "style": "古风",
+            "style_description": "cinematic",
+            "characters": {},
+            "scenes": {},
+            "props": {},
+            "script_plan_segments": [
+                {
+                    "segment_id": "E1S01",
+                    "novel_text": "她推开祠堂的门。",
+                    "duration_seconds": 6,
+                    "segment_break": True,
+                }
+            ],
+            "aspect_ratio": "9:16",
+            "episode": 1,
+        }
+        kwargs.update(overrides)
+        return build_narration_prompt(**kwargs)
+
+    def test_narration_prompt_has_no_audience_block_by_default(self):
+        assert "面向儿童" not in self._narration_prompt()
+
+    def test_narration_prompt_renders_kids_gear_when_audience_indicates_children(self):
+        prompt = self._narration_prompt(audience="儿童 6-10 岁")
+        assert "面向儿童（约 6-10 岁）观众的创作规则" in prompt
+
+    def test_narration_prompt_ignores_adult_audience(self):
+        assert "面向儿童" not in self._narration_prompt(audience="都市情感，成年观众")
 
 
 class TestOverviewPrompt:
@@ -499,6 +664,12 @@ class TestPromptAuthoringPromptGuards:
 
     def test_narration_prompt_injects_pacing(self):
         assert self._squash(render_pacing_section("narration")) in self._squash(self._narration_prompt())
+
+    def test_drama_prompt_injects_shot_continuity_rules(self):
+        assert self._squash(render_shot_continuity_rules()) in self._squash(self._drama_prompt())
+
+    def test_narration_prompt_injects_shot_continuity_rules(self):
+        assert self._squash(render_shot_continuity_rules()) in self._squash(self._narration_prompt())
 
     def test_drama_no_enum_dump_in_prompt(self):
         """schema 已声明的枚举不再在 prompt 中重复列举（节省 token + 防漂移）。"""

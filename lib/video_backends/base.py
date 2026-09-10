@@ -213,6 +213,25 @@ _NON_RETRYABLE_LOCAL_ERRORS: tuple[type[Exception], ...] = (
 )
 
 
+def is_pre_send_transport_error(exc: Exception) -> bool:
+    """判断异常是否属于「请求确定未送达」阶段的 httpx 传输错误（连接建立失败等）。
+
+    供不直接调用 ``submit_post``、而是自行处理 SDK 抛出的原始 httpx 异常的 backend
+    （如 gemini：google-genai SDK 默认不重试、原样透传底层 httpx 异常）复用同一套
+    「连接建立失败可重试，读/写阶段及之后归歧义态」判据，避免各自重复维护一份传输错误分类。
+    """
+    return isinstance(exc, _NOT_SENT_TRANSPORT_ERRORS)
+
+
+def is_non_retryable_local_error(exc: Exception) -> bool:
+    """判断异常是否为请求发出前就确定失败的本地/协议错误（无计费风险，但重试无意义）。
+
+    与 :func:`is_pre_send_transport_error` 配套：命中此判据的异常应原样抛出，既不重试
+    也不套「请求可能已送达」的歧义态包装。
+    """
+    return isinstance(exc, _NON_RETRYABLE_LOCAL_ERRORS)
+
+
 class AmbiguousSubmitError(RuntimeError):
     """create/submit（非幂等的「创建 + 计费」）阶段的歧义态失败。
 
@@ -231,6 +250,35 @@ class AmbiguousSubmitError(RuntimeError):
             "（读超时/连接中途断开），为避免重复建任务与重复计费不自动重试；"
             "请到供应商侧确认任务状态后再手动重试"
         )
+
+
+class ProviderGenerationFailedError(RuntimeError):
+    """轮询判定的供应商侧生成终态失败（``failed`` / ``expired`` 等终态状态）。
+
+    与 ``ProviderRejectedError``（提交阶段被 4xx 拒绝）互补：这一类失败是任务已被受理、
+    轮询到终态后供应商才判定失败，常见的是审核类拒绝（生成内容触发内容安全策略）。携带
+    结构化 ``status`` / ``provider_code`` 供上层分类改写文案，``provider_message`` 保留
+    供应商原文（ADR 0052：不得从原文倒推分类，只信结构化字段）。
+
+    ``str(self)`` 保留与历史裸 ``RuntimeError`` 一致的可读形态（``{label} 视频生成失败
+    (status=...): ...``），换类型不换现有日志/测试里对这条消息的字符串匹配。
+    """
+
+    def __init__(
+        self,
+        *,
+        provider: str,
+        label: str,
+        status: str,
+        provider_code: str | None,
+        provider_message: str,
+    ) -> None:
+        self.provider = provider
+        self.status = status
+        self.provider_code = provider_code
+        self.provider_message = provider_message
+        detail = f"{provider_code}: {provider_message}" if provider_code else provider_message
+        super().__init__(f"{label} 视频生成失败(status={status}): {detail}")
 
 
 def should_retry_submit(exc: Exception) -> bool:
@@ -332,7 +380,11 @@ async def submit_post(
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
             if include_provider_reason and is_provider_rejection(resp.status_code):
-                raise provider_rejected_error(exc, provider_reason=provider_reason_summary(resp)) from None
+                raise provider_rejected_error(
+                    exc,
+                    provider_reason=provider_reason_summary(resp),
+                    provider_code=provider_code_from_response(resp),
+                ) from None
             raise redacted_status_error(exc) from None
     return resp
 
@@ -459,7 +511,7 @@ async def poll_with_retry[T](
     *,
     poll_fn: Callable[[], Awaitable[T]],
     is_done: Callable[[T], bool],
-    is_failed: Callable[[T], str | None],
+    is_failed: Callable[[T], str | Exception | None],
     max_wait: float,
     poll_interval: float = VIDEO_POLL_INTERVAL_SECONDS,
     retryable_errors: tuple[type[Exception], ...] = BASE_RETRYABLE_ERRORS,
@@ -482,7 +534,9 @@ async def poll_with_retry[T](
     Args:
         poll_fn: 每次轮询调用的异步函数，返回最新状态。
         is_done: 判断轮询结果是否表示任务完成。
-        is_failed: 判断轮询结果是否表示任务失败，返回错误信息或 None。
+        is_failed: 判断轮询结果是否表示任务失败，返回错误信息（str，包成 RuntimeError）、
+            异常实例（原样抛出，供 caller 抛结构化类型如 ``ProviderGenerationFailedError``）
+            或 None（未失败）。
         max_wait: 最大等待时间（秒），超时抛出 TimeoutError。
         poll_interval: 成功响应后的轮询间隔，同时是失败退避的基数；视频调用通道统一用默认 5 秒。
         retryable_errors: 可重试的异常类型元组（未指定 retry_if 时生效）。
@@ -522,9 +576,9 @@ async def poll_with_retry[T](
             )
         else:
             consecutive_failures = 0
-            error_msg = is_failed(result)
-            if error_msg is not None:
-                raise RuntimeError(error_msg)
+            failure = is_failed(result)
+            if failure is not None:
+                raise failure if isinstance(failure, Exception) else RuntimeError(failure)
             if is_done(result):
                 return result
             if on_progress is not None:
@@ -617,6 +671,26 @@ def _reason_code(body: Mapping[str, object]) -> str | None:
             return value.strip()
         if isinstance(value, int) and not isinstance(value, bool):
             return str(value)
+    return None
+
+
+def _reason_code_recursive(payload: object, depth: int = 0) -> str | None:
+    """在容器下钻中找机器码，与 :func:`_reason_text` 复用同一套外层容器与深度上限。
+
+    分类（``lib.moderation_rewrite``）只信这个字段，不信自然语言摘要——错误体常把机器码
+    裹在 ``error`` / ``output`` 等容器下，顶层 :func:`_reason_code` 只看一层取不到。
+    """
+    if not isinstance(payload, dict) or depth >= _REASON_MAX_DEPTH:
+        return None
+    body = cast(dict[str, object], payload)
+    code = _reason_code(body)
+    if code:
+        return code
+    for key in _REASON_NESTED_KEYS:
+        if key in body:
+            nested = _reason_code_recursive(body[key], depth + 1)
+            if nested:
+                return nested
     return None
 
 
@@ -721,6 +795,24 @@ def provider_reason_summary(response: httpx.Response) -> str | None:
     if len(summary) <= PROVIDER_REASON_MAX_CHARS:
         return summary
     return summary[: PROVIDER_REASON_MAX_CHARS - len(_PROVIDER_REASON_ELLIPSIS)] + _PROVIDER_REASON_ELLIPSIS
+
+
+def provider_code_from_response(response: httpx.Response) -> str | None:
+    """把上游确定性 4xx 的响应体里与拒因同层的机器码提炼出来；无可用内容返回 ``None``。
+
+    与 :func:`provider_reason_summary` 同一批守卫（只对 4xx 产出、认证类状态码不透传）：
+    机器码与摘要出自同一响应体、同一可行动性口径。机器码本身就是结构化字段，不需要脱敏——
+    上游不会把凭证塞进错误分类码里。
+    """
+    if not is_provider_rejection(response.status_code):
+        return None
+    if response.status_code in _CREDENTIAL_STATUS_CODES:
+        return None
+    try:
+        payload: object = response.json()
+    except (httpx.ResponseNotRead, ValueError):
+        return None
+    return _reason_code_recursive(payload)
 
 
 @dataclass(frozen=True)

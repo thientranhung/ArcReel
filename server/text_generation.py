@@ -24,7 +24,12 @@ from lib.artifact_manifest import (
     ArtifactKey,
     ProjectArtifactManifestAdapter,
 )
-from lib.artifact_provenance import ScriptPlanPromptVariant, build_script_plan_request
+from lib.artifact_provenance import (
+    PreviousScriptLoader,
+    ScriptPlanPromptVariant,
+    build_script_plan_request,
+    previous_episode_script_relpath,
+)
 from lib.artifact_registration import ArtifactRegistrationReceipt
 from lib.asset_types import BUCKET_KEY, asset_name_comparison_key
 from lib.async_thread import run_noninterruptible_sync, run_sync_transaction
@@ -545,21 +550,63 @@ def _load_novel_source(project_path: Path, source: str | None, *, episode: int) 
     return novel_text
 
 
+def _make_previous_script_loader(
+    projects: ProjectManager, project_name: str, project: Mapping[str, Any]
+) -> PreviousScriptLoader:
+    """构造只读上集剧本读取器，供 ``previous_episode_exit_state`` 抽取上集末场退出态。
+
+    文件名解析经 ``lib.artifact_provenance.previous_episode_script_relpath`` 单一真相源——
+    生成入口、草稿读时重判（``server/draft_workflow.py``）与基线预检
+    （``lib.artifact_planner``）三处都经它取同一份「上集剧本是哪个文件」的结论，
+    否则某一处认的上集剧本对不上另一处，退出态与 basis 就会分叉。
+
+    上集剧本未提交（尚未生成 / 文件缺失）按 None 处理——退出态是可选输入，缺失时提示词
+    与不带该参数时逐字相同（见 ``lib.artifact_provenance.project_script_plan_prompt_inputs``）。
+    """
+
+    def _load(previous_episode: int) -> dict[str, Any] | None:
+        filename = previous_episode_script_relpath(project, previous_episode)
+        try:
+            return projects.load_script_readonly(project_name, filename)
+        except FileNotFoundError:
+            return None
+
+    return _load
+
+
 def _load_script_plan_source_with_basis(
     project_path: Path,
     source: str | None,
     project: dict[str, Any],
     episode: int,
     expected_variant: ScriptPlanPromptVariant,
+    *,
+    projects: ProjectManager | None = None,
+    project_name: str | None = None,
 ) -> tuple[str, dict[str, object], ArtifactBasis]:
-    """Freeze the exact source text and project semantics consumed by a script_plan request."""
+    """Freeze the exact source text and project semantics consumed by a script_plan request.
+
+    ``projects`` / ``project_name`` 是可选的上集剧本读取能力：仅在都提供时才把
+    ``previous_episode_exit_state`` 纳入 prompt / basis（见 ``_make_previous_script_loader``）。
+    这是计算 script_plan basis 的唯一入口——生成入口（``generate_drama_script_plan`` 等）与
+    ``server/draft_workflow.py`` 的草稿读时重判都经它传入各自持有的 ``ProjectManager`` /
+    项目名；两者算出的 basis 因此对同一上集剧本状态给出同一个 digest，不会出现「生成时纳入
+    退出态、重判时又判不带退出态的旧基线」的分叉。仍缺省时（如无 ``ProjectManager`` 可用的
+    极端调用路径）退出态静默省略——与「未设不进 basis」同一口径，不影响其余输入的投影。
+    """
 
     novel_text = _load_novel_source(project_path, source, episode=episode)
+    previous_script_loader = (
+        _make_previous_script_loader(projects, project_name, project)
+        if projects is not None and project_name is not None
+        else None
+    )
     prompt_inputs, basis = build_script_plan_request(
         novel_text,
         episode=episode,
         project=project,
         expected_variant=expected_variant,
+        previous_script_loader=previous_script_loader,
     )
     return novel_text, prompt_inputs, basis
 
@@ -839,6 +886,8 @@ async def generate_drama_script_plan(
             project,
             episode,
             "drama",
+            projects=projects,
+            project_name=project_name,
         )
     except ValueError as exc:
         raise TextGenerationError(f"❌ {exc}") from exc
@@ -863,10 +912,12 @@ async def generate_drama_script_plan(
             episode_outline=cast(dict[str, Any] | None, prompt_inputs["episode_outline"]),
             next_episode_outline=cast(dict[str, Any] | None, prompt_inputs["next_episode_outline"]),
             previous_episode_outline=cast(dict[str, Any] | None, prompt_inputs.get("previous_episode_outline")),
+            previous_episode_exit_state=cast(dict[str, Any] | None, prompt_inputs.get("previous_episode_exit_state")),
             target_language=cast(str, prompt_inputs["target_language"]),
             source_language=cast(str | None, prompt_inputs["source_language"]),
             speech_rate_override=cast(float | None, prompt_inputs["speech_rate_override"]),
             episode_target_duration=cast(int | None, prompt_inputs["episode_target_duration"]),
+            audience=cast(str | None, prompt_inputs.get("audience")),
         )
         prompt = append_user_instructions(prompt, instructions)
 
@@ -1497,6 +1548,8 @@ async def generate_reference_script_plan(
             project,
             episode,
             "reference_video",
+            projects=projects,
+            project_name=project_name,
         )
     except ValueError as exc:
         raise TextGenerationError(f"❌ {exc}") from exc
@@ -1656,6 +1709,8 @@ async def generate_narration_script_plan(
             project,
             episode,
             "narration",
+            projects=projects,
+            project_name=project_name,
         )
     except ValueError as exc:
         raise TextGenerationError(f"❌ {exc}") from exc

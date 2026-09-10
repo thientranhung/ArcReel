@@ -10,6 +10,7 @@ from lib.generation_result import (
     ProviderCheckpoint,
 )
 from lib.narration_delivery import POST_PRODUCTION, USE_TTS, NarrationDelivery
+from lib.prompt_rules.asset_identity_rules import render_asset_identity_rules
 from lib.workflow_plan import (
     WorkflowStepState,
     WorkflowTaskObservation,
@@ -354,6 +355,30 @@ def test_stale_video_remains_exportable_without_an_implicit_regeneration_step() 
     assert video.artifacts["stale_ids"] == ["E1S01"]
     assert video.action is None
     assert plan.next_action.type == "export"
+
+
+def test_analyze_assets_action_carries_the_identity_rules_for_remote_mcp_clients() -> None:
+    """远端 MCP 客户端自己写 description，不跑内嵌 analyze-assets 子智能体，只能从这里拿规则。"""
+    status = _status(state="ASSET_INVENTORY", action="analyze_assets", requested_ids=[])
+
+    plan = build_workflow_plan(status)
+
+    assert plan.next_action.type == "analyze_assets"
+    assert plan.next_action.args["authoring_rules"] == render_asset_identity_rules()
+
+    asset_inventory_step = _step(plan, "asset_inventory")
+    assert asset_inventory_step.action is not None
+    assert asset_inventory_step.action.args["authoring_rules"] == render_asset_identity_rules()
+
+
+def test_other_action_types_do_not_carry_authoring_rules() -> None:
+    status = _status(state="EXPORT_READY", action="export")
+    status.next_action = WorkflowNextAction(type=WorkflowActionType.EXPORT, reason="usable media is ready")
+
+    plan = build_workflow_plan(status)
+
+    assert plan.next_action.type == "export"
+    assert "authoring_rules" not in plan.next_action.args
 
 
 class TestCostEstimate:

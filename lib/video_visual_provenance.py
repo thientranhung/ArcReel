@@ -59,6 +59,7 @@ def build_storyboard_video_visual_basis(
     utterances: object,
     has_utterances: bool,
     voice_characters: object,
+    audience: str = "",
 ) -> ArtifactBasis:
     """Describe the request facts that determine one storyboard video prompt and frames."""
 
@@ -68,6 +69,7 @@ def build_storyboard_video_visual_basis(
         {"utterances": utterances} if has_utterances else None,
         content_mode=content_mode,
         voice_characters=voice_characters if isinstance(voice_characters, dict) else None,
+        audience=audience,
     )
     files = [("storyboard", storyboard_image)]
     if end_frame_image is not None:

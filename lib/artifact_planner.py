@@ -25,11 +25,13 @@ from lib.artifact_manifest import (
     ProjectArtifactManifestAdapter,
 )
 from lib.artifact_provenance import (
+    PreviousScriptLoader,
     build_ad_episode_script_basis,
     build_episode_script_basis,
     build_planless_episode_script_basis,
     build_script_plan_basis,
     decode_script_plan_source,
+    previous_episode_script_relpath,
 )
 from lib.artifact_version_provenance import parse_typed_audio_settings, parse_typed_media_version_target
 from lib.asset_derivatives import (
@@ -44,6 +46,7 @@ from lib.grid.layout import grid_aspect_ratio_for
 from lib.grid.models import GridGeneration
 from lib.media_artifact_currency import build_current_audio_artifact_basis, build_current_video_artifact_basis
 from lib.narration_delivery import POST_PRODUCTION, USE_TTS
+from lib.project_audience import project_audience
 from lib.project_migration_failure import ProjectMigrationError
 from lib.project_migration_report import MigrationSkippedArtifact
 from lib.project_schema import CURRENT_PROJECT_SCHEMA_VERSION, parse_project_schema_version, project_schema_is_current
@@ -377,6 +380,7 @@ class TargetStatePlanner:
         style_description = self.project.get("style_description", "")
         if not isinstance(style, str) or not isinstance(style_description, str):
             raise ValueError("project visual style fields must be strings")
+        audience = project_audience(self.project) or ""
         for asset_type, spec in ASSET_SPECS.items():
             bucket = self.project.get(spec.bucket_key, {})
             if not isinstance(bucket, Mapping):
@@ -409,6 +413,7 @@ class TargetStatePlanner:
                         style_description=style_description,
                         aspect_ratio="16:9",
                         references=references,
+                        audience=audience,
                     )
                 except (OSError, TypeError, ValueError):
                     continue
@@ -550,6 +555,35 @@ class TargetStatePlanner:
         observation = self.adapter.inspect_artifact(self._pending_source(script_plan_rel))
         return observation.blocker is None and not observation.present
 
+    def _previous_script_loader(self) -> PreviousScriptLoader:
+        """构造只读上集剧本读取器，供基线重建纳入 ``previous_episode_exit_state``。
+
+        文件名解析经 ``previous_episode_script_relpath`` 单一真相源——与生成入口 / 草稿读时重判
+        （``server/text_generation.py`` / ``server/draft_workflow.py``）取同一份「上集剧本是哪个
+        文件」的结论，三处算出的 script_plan basis 才不会因为「谁认的上集剧本」不一致而分叉。
+
+        经 ``_read_dependency`` 读取（而非绕开清单直接 ``Path.read_bytes``）：读到的字节同样计入
+        ``self.dependencies`` / ``self.dependency_digests``，与本集自身 script_plan / 源文的依赖
+        追踪同一纪律，供后续稳定性闸门核对。上集剧本缺失、清单判定被拦（越权/符号链接等）、或
+        JSON 解析失败均按 None 处理——退出态是可选输入，不能让它的读取失败拖垮整份基线规划。
+        """
+
+        def _load(previous_episode: int) -> dict[str, Any] | None:
+            if type(previous_episode) is not int or previous_episode < 1:
+                return None
+            script_rel = previous_episode_script_relpath(self.project, previous_episode)
+            try:
+                raw = self._read_dependency(script_rel, "previous episode script")
+            except (ArtifactManifestError, ValueError):
+                return None
+            try:
+                parsed = self._parse_json(raw, f"previous episode script {script_rel}")
+            except ValueError:
+                return None
+            return parsed if isinstance(parsed, dict) else None
+
+        return _load
+
     def _plan_one_script_plan(self, binding: _EpisodeBinding) -> _FormalScriptPlanState | None:
         if self.project.get("content_mode") not in {"narration", "drama"}:
             return None
@@ -576,6 +610,7 @@ class TargetStatePlanner:
                     source_content,
                     episode=binding.episode,
                     project=self.project,
+                    previous_script_loader=self._previous_script_loader(),
                 )
             except (TypeError, ValueError):
                 pass
@@ -596,6 +631,7 @@ class TargetStatePlanner:
         aspect_ratio = self.project.get("aspect_ratio") or "9:16"
         if not isinstance(style, str) or not isinstance(style_description, str) or not isinstance(aspect_ratio, str):
             raise ValueError("project storyboard style, style description, and aspect ratio must be strings")
+        audience = project_audience(self.project) or ""
         for episode in self.episodes:
             storyboard_items, id_field, char_field, scene_field, prop_field = get_storyboard_items(episode.script)
             grid_members = self._grid_members_by_resource(episode.episode)
@@ -658,6 +694,7 @@ class TargetStatePlanner:
                         style_description=style_description,
                         aspect_ratio=aspect_ratio,
                         references=references,
+                        audience=audience,
                     )
                 except (OSError, TypeError, ValueError):
                     continue

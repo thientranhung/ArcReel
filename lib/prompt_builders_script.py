@@ -7,11 +7,15 @@
 - 不写无法被 LLM 自检的字数硬限制（"≤200 字"）；用示例隐性表达节奏。
 - 字段说明用少量正例与带解说的反例传达要求，不堆"必须 / 禁止"清单。
 - 节奏建议由 lib.prompt_rules.episode_pacing 注入，跨子智能体与 builder 共享。
+- shot-to-shot 连续性与运镜规则由 lib.prompt_rules.shot_continuity 注入 prompt_authoring，
+  跨 drama / narration / 参考生视频三条路径共享同一份文本。
 """
 
 from lib.prompt_rules.asset_appearance import asset_reference_names, iter_asset_appearances
+from lib.prompt_rules.audience_gear import render_audience_section
 from lib.prompt_rules.episode_pacing import render_pacing_section
 from lib.prompt_rules.episode_target_duration import render_episode_target_duration_rule
+from lib.prompt_rules.shot_continuity import render_shot_continuity_rules
 from lib.speech_rate import speech_rate_units_per_second
 from lib.text_metrics import reading_unit_noun
 
@@ -131,16 +135,53 @@ _OPENING_BRIDGE_GUIDE_VERBATIM = (
 )
 
 
+# 入场态承接要求：上集末场的地点/在场角色/道具/动作/末句台词是事实性快照（由
+# ``lib.episode_ledger.previous_episode_exit_state`` 从上集已提交剧本抽取），驱动本集开场的
+# 画面延续——与 ``_OPENING_BRIDGE_GUIDE_*``（叙事层面的钩子/预告承接）是两个维度，可共存。
+# screenplay 走逐字契约，复用 ``_OPENING_BRIDGE_GUIDE_VERBATIM`` 既有措辞（只改视觉、不新增口播），
+# 不再另写一条，避免同一条「scene_description-only / 不新增口播」的约束重复出现两次。
+_EXIT_STATE_CONTINUITY_GUIDE = (
+    "开场分镜的入场状态（人物位置、着装、手持道具、时间段）须承接自此退出状态，除非本集原文明确有时间或空间跳跃。"
+)
+
+
+def _format_exit_state_lines(exit_state: dict) -> str:
+    """渲染上集末场退出态条目：地点 / 在场角色 / 道具 / 末尾动作 / 末句台词，缺失的行省略。"""
+    lines: list[str] = []
+    location = exit_state.get("location") or []
+    if location:
+        lines.append(f"地点：{'、'.join(location)}")
+    characters_present = exit_state.get("characters_present") or []
+    if characters_present:
+        lines.append(f"在场角色：{'、'.join(characters_present)}")
+    props = exit_state.get("props") or []
+    if props:
+        lines.append(f"道具：{'、'.join(props)}")
+    last_action = exit_state.get("last_action")
+    if last_action:
+        lines.append(f"末尾动作：{last_action}")
+    last_utterance = exit_state.get("last_utterance") or {}
+    text = last_utterance.get("text")
+    if text:
+        speaker = last_utterance.get("speaker")
+        speaker_prefix = f"{speaker}：" if speaker else ""
+        lines.append(f"末句台词：{speaker_prefix}{text}")
+    return "\n".join(lines)
+
+
 def _format_episode_outline_block(
     episode_outline: dict | None,
     next_episode_outline: dict | None,
     previous_episode_outline: dict | None = None,
+    previous_episode_exit_state: dict | None = None,
     *,
     verbatim_dialogue: bool = False,
 ) -> str:
-    """渲染上集 / 本集 / 下集大纲三个上下文块；无规划数据时返回空串（prompt 不渲染该段）。
+    """渲染上集 / 本集 / 下集大纲与上集退出态等上下文块；无规划数据时返回空串（prompt 不渲染该段）。
 
-    ``verbatim_dialogue=True``（screenplay）时开场承接只下发视觉版要求，不允许新增画外音。
+    ``previous_episode_outline`` 与 ``previous_episode_exit_state`` 相互独立：各自只在有值时渲染，
+    互不依赖对方是否存在。``verbatim_dialogue=True``（screenplay）时开场承接只下发视觉版要求，
+    不允许新增画外音；此时「scene_description-only / 不新增口播」的桥接引导只出现一次，供两者共用。
     """
     parts: list[str] = []
     if previous_episode_outline:
@@ -150,7 +191,19 @@ def _format_episode_outline_block(
 上集大纲（仅用于设计本集开场的承接，不要把上集情节重新写进本集）：
 {title_line}{_format_outline_lines(previous_episode_outline)}
 </previous_episode_outline>""")
-        parts.append(_OPENING_BRIDGE_GUIDE_VERBATIM if verbatim_dialogue else _OPENING_BRIDGE_GUIDE_NOVEL)
+    if previous_episode_exit_state:
+        parts.append(f"""<previous_episode_exit_state>
+上一集结尾状态（仅用于设计本集开场的入场态延续，不要重复描述上集情节）：
+{_format_exit_state_lines(previous_episode_exit_state)}
+</previous_episode_exit_state>""")
+    if previous_episode_outline or previous_episode_exit_state:
+        if verbatim_dialogue:
+            parts.append(_OPENING_BRIDGE_GUIDE_VERBATIM)
+        else:
+            if previous_episode_outline:
+                parts.append(_OPENING_BRIDGE_GUIDE_NOVEL)
+            if previous_episode_exit_state:
+                parts.append(_EXIT_STATE_CONTINUITY_GUIDE)
     if episode_outline:
         title = episode_outline.get("title")
         title_line = f"本集标题：{title}\n" if title else ""
@@ -318,15 +371,24 @@ def build_narration_prompt(
     episode: int,
     aspect_ratio: str = "9:16",
     target_language: str = "中文",
+    audience: str | None = None,
 ) -> str:
     """构建旁白/解说模式 prompt_authoring（视觉层）prompt。
 
     script_plan 已定的 novel_text / 时长 / segment_break / 出场角色 / 场景 / 道具按 segment_id
     透传，prompt_authoring 只产 image_prompt 与 video_prompt。``<segments>`` 块为只读上下文，
     LLM 不重出这些字段——novel_text 由此不再经 prompt_authoring 的 LLM 扩写漂移。
+
+    ``audience`` 是解析好的受众文本（见 ``lib.project_audience.resolve_project_audience_text``），
+    经 ``render_audience_section`` 判定是否命中儿童 gear；非儿童受众 / 未设时该函数回空串，
+    prompt 与不带该参数时逐字相同。
     """
     pacing_block = render_pacing_section("narration") + "\n\n"
+    continuity_block = render_shot_continuity_rules() + "\n\n"
     segments_block = _format_narration_script_plan_segments(script_plan_segments)
+    audience_block = render_audience_section(audience)
+    if audience_block:
+        audience_block += "\n\n"
 
     return f"""# 角色与任务
 
@@ -337,7 +399,7 @@ def build_narration_prompt(
 **输出语言**：所有字符串值必须使用 {target_language}；JSON 键名 / 枚举值保持英文。
 **结构约束**：字段 / 枚举 / 必填项由 response_schema 强制；本提示只解释**如何写好每个字段的内容**。
 
-{pacing_block}# 上下文
+{pacing_block}{continuity_block}{audience_block}# 上下文
 
 <overview>
 {project_overview.get("synopsis", "")}
@@ -468,6 +530,7 @@ def build_drama_prompt(
     characters: dict | None = None,
     scenes: dict | None = None,
     props: dict | None = None,
+    audience: str | None = None,
 ) -> str:
     """构建剧情演绎 prompt_authoring（视觉层）prompt。
 
@@ -479,8 +542,16 @@ def build_drama_prompt(
 
     ``characters`` / ``scenes`` / ``props`` 注入出场资产的外观描述（project.json 各 bucket），
     供视觉字段写服装 / 材质 / 陈设细节时取材；三者都为 None 时不渲染资产块。
+
+    ``audience`` 是解析好的受众文本（见 ``lib.project_audience.resolve_project_audience_text``），
+    经 ``render_audience_section`` 判定是否命中儿童 gear；非儿童受众 / 未设时该函数回空串，
+    prompt 不变。
     """
     pacing_block = render_pacing_section("drama") + "\n\n"
+    continuity_block = render_shot_continuity_rules() + "\n\n"
+    audience_block = render_audience_section(audience)
+    if audience_block:
+        audience_block += "\n\n"
     assets_block = ""
     if characters is not None or scenes is not None or props is not None:
         assets_block = f"""<characters>
@@ -508,7 +579,7 @@ def build_drama_prompt(
 **结构约束**：字段 / 枚举 / 必填项由 response_schema 强制；本提示只解释**如何写好每个字段的内容**。
 **对齐约束**：每个分镜产出一条视觉层，`scene_id` 必须与下方内容逐字一致、不增不减不改；不要输出口播 / 时长 / 资产等非视觉字段。
 
-{pacing_block}# 上下文
+{pacing_block}{continuity_block}{audience_block}# 上下文
 
 <overview>
 {project_overview.get("synopsis", "")}
@@ -575,6 +646,8 @@ def build_normalize_prompt(
     episode_outline: dict | None = None,
     next_episode_outline: dict | None = None,
     previous_episode_outline: dict | None = None,
+    previous_episode_exit_state: dict | None = None,
+    audience: str | None = None,
 ) -> str:
     """脚本规划的规范化 prompt：源文 → 结构化分镜内容（utterances + source_text + 视觉改编描述）。
 
@@ -586,6 +659,9 @@ def build_normalize_prompt(
     scene_description；默认 ``"novel"`` 维持「改编」语义、画外音由语境判断放开。``episode_outline`` /
     ``next_episode_outline`` 来自分集账本，驱动内容覆盖故事节点、末场落地集尾钩子；
     ``previous_episode_outline``（第二集起）驱动开场承接上集预告 / 钩子：novel 可加画外音，screenplay 只用画面。
+    ``previous_episode_exit_state``（第二集起，由 ``lib.episode_ledger.previous_episode_exit_state`` 从上集
+    已提交剧本抽取）驱动开场的入场态延续（地点 / 在场角色 / 道具 / 末尾动作 / 末句台词），与
+    ``previous_episode_outline`` 相互独立、可单独存在。
 
     ``source_language`` 供时长指引的「台词口播时长」单向下界软指引取语速（阅读单位 / 秒，来自
     ``lib.speech_rate`` 单一真相源，与保存期上界 warning、字幕派生同口径）；缺省 / 未登记回退默认语速。
@@ -595,6 +671,11 @@ def build_normalize_prompt(
     ``episode_target_duration`` 是项目级「单集目标时长」偏好（秒，由调用方经
     ``project_episode_target_duration`` 解析），驱动模型决定本集拆多少个场景；``None`` 即未设目标、
     不注入该段。它与 ``default_duration`` 是两个尺度（整集体量 vs 单场默认秒数），同为软偏好。
+
+    ``audience`` 是解析好的受众文本（由调用方经 ``lib.project_audience.resolve_project_audience_text``
+    解析：项目显式 ``audience`` 字段优先，否则退回 overview 的 world_setting / theme 文本），经
+    ``render_audience_section`` 判定是否命中儿童（约 6-10 岁）gear；非儿童受众 / 未设时回空串，
+    prompt 与不带该参数时逐字相同。
     """
     char_list = _format_names(characters, "character")
     scene_list = _format_names(scenes, "scene")
@@ -611,7 +692,11 @@ def build_normalize_prompt(
     utterances_rule = _NORMALIZE_UTTERANCES_SCREENPLAY if is_screenplay else _NORMALIZE_UTTERANCES_NOVEL
     break_rule = _NORMALIZE_BREAK_RULE_SCREENPLAY if is_screenplay else _NORMALIZE_BREAK_RULE_NOVEL
     outline_block = _format_episode_outline_block(
-        episode_outline, next_episode_outline, previous_episode_outline, verbatim_dialogue=is_screenplay
+        episode_outline,
+        next_episode_outline,
+        previous_episode_outline,
+        previous_episode_exit_state,
+        verbatim_dialogue=is_screenplay,
     )
 
     # 资产引用字段（characters_in_scene / scenes / props，须逐字等于 project.json 登记名）与
@@ -676,13 +761,16 @@ def build_normalize_prompt(
     if episode_target_rule:
         duration_rule = f"{duration_rule}。{episode_target_rule}"
     pacing_block = render_pacing_section("drama") + "\n\n"
+    audience_block = render_audience_section(audience)
+    if audience_block:
+        audience_block += "\n\n"
 
     return f"""{task_line}
 
 **输出语言**：{language_rule}
 **结构约束**：字段 / 枚举 / 必填项由 response_schema 强制；本提示只解释**如何写好每个字段的内容**。
 
-{pacing_block}## 项目信息
+{pacing_block}{audience_block}## 项目信息
 
 <overview>
 {project_overview.get("synopsis", "")}

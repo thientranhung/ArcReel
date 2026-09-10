@@ -102,7 +102,7 @@ function SectionCard({ kicker, title, description, children, footer }: SectionCa
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export function ProjectSettingsPage() {
-  const { t } = useTranslation("dashboard");
+  const { t } = useTranslation(["dashboard", "templates"]);
   const params = useParams<{ projectName: string }>();
   const projectName = params.projectName || "";
   const [, navigate] = useLocation();
@@ -154,6 +154,8 @@ export function ProjectSettingsPage() {
   const [audioBackend, setAudioBackend] = useState<string>("");
   const [narrationVoice, setNarrationVoice] = useState<string>("");
   const [narrationSpeed, setNarrationSpeed] = useState<number | null>(null);
+  // 目标受众：自由文本，空 = 未设（提示词层不渲染受众专属规则）
+  const [audience, setAudience] = useState<string>("");
   // 角色声音绑定方式：参考生视频路线专有；缺省即默认档（提示词软约束）
   const [voiceBinding, setVoiceBinding] = useState<CharacterVoiceBinding>(DEFAULT_CHARACTER_VOICE_BINDING);
   const [textDefault, setTextDefault] = useState<string>("");
@@ -196,11 +198,27 @@ export function ProjectSettingsPage() {
   // ── Style picker state (independent save flow) ─────────────────────────────
   const [styleValue, setStyleValue] = useState<StylePickerValue | null>(null);
   const [savingStyle, setSavingStyle] = useState(false);
+
+  // ── Custom style text state (independent save flow) ────────────────────────
+  // 自由文本风格：设置页 StylePicker 只有模版/上传参考图两个入口，长篇自定义风格描述
+  // （如定制 Pixar/DreamWorks 风格块）没有直接入口，只能靠这里编辑原始 style 字符串。
+  const [rawStyleText, setRawStyleText] = useState<string>("");
+  const [customStyleDraft, setCustomStyleDraft] = useState<string>("");
+  // project.style_template_id 的字面值（未选模版时为 null）。不能借道 styleValue.templateId
+  // 判断"是否选了模版"——deriveStyleValue 在 templateId 缺失时会回退展示 DEFAULT_TEMPLATE_ID
+  // 供 StylePicker 高亮默认卡片，那只是选择器的展示兜底，不代表 project.json 里真的写了
+  // style_template_id；这里要的是字面值，据此才能正确判断「本来就是自由文本、没有模版」的项目。
+  const [styleTemplateIdRaw, setStyleTemplateIdRaw] = useState<string | null>(null);
+  // 当前 style 是某个模版展开的文本时先只读展示，需用户显式点「脱离模版编辑」才可改写，
+  // 避免误编辑后保存把模版关联悄悄清掉。
+  const [detachedFromTemplate, setDetachedFromTemplate] = useState(false);
+  const [savingCustomStyle, setSavingCustomStyle] = useState(false);
   const initialRef = useRef({
     videoBackend: "", videoProviderI2V: "", videoProviderR2V: "",
     imageBackendDefault: "", imageBackendT2I: "", imageBackendI2I: "",
     audioOverride: null as boolean | null,
     audioBackend: "", narrationVoice: "", narrationSpeed: null as number | null,
+    audience: "",
     voiceBinding: DEFAULT_CHARACTER_VOICE_BINDING,
     textDefault: "", textSimple: "", textComplex: "",
     aspectRatio: "", gridStoryboard: false,
@@ -285,6 +303,7 @@ export function ProjectSettingsPage() {
       const nv = (project.narration_voice as string | undefined) ?? "";
       const rawSpeed = project.narration_speed;
       const ns = typeof rawSpeed === "number" && Number.isFinite(rawSpeed) ? rawSpeed : null;
+      const aud = (project.audience as string | undefined) ?? "";
       const td = (project.default_text_backend as string | undefined) ?? "";
       const tsi = (project.text_backend_simple as string | undefined) ?? "";
       const tcx = (project.text_backend_complex as string | undefined) ?? "";
@@ -314,6 +333,7 @@ export function ProjectSettingsPage() {
       setAudioBackend(ab);
       setNarrationVoice(nv);
       setNarrationSpeed(ns);
+      setAudience(aud);
       setTextDefault(td);
       setTextSimple(tsi);
       setTextComplex(tcx);
@@ -352,11 +372,17 @@ export function ProjectSettingsPage() {
       const derivedStyle = deriveStyleValue(project, projectName);
       setStyleValue(derivedStyle);
       initialStyleRef.current = derivedStyle;
+      const nextRawStyle = typeof project.style === "string" ? project.style : "";
+      setRawStyleText(nextRawStyle);
+      setCustomStyleDraft(nextRawStyle);
+      setStyleTemplateIdRaw(typeof project.style_template_id === "string" ? project.style_template_id : null);
+      setDetachedFromTemplate(false);
       initialRef.current = {
         videoBackend: vb, videoProviderI2V: vpi2v, videoProviderR2V: vpr2v,
         imageBackendDefault: ibDefault, imageBackendT2I: ibt2i, imageBackendI2I: ibi2i,
         audioOverride: ao,
         audioBackend: ab, narrationVoice: nv, narrationSpeed: ns,
+        audience: aud,
         voiceBinding: vbind,
         textDefault: td, textSimple: tsi, textComplex: tcx,
         aspectRatio: ar, gridStoryboard: grid, defaultDuration: dd, speechRate: sr,
@@ -399,7 +425,18 @@ export function ProjectSettingsPage() {
     && (initialStyleRef.current.templateId !== null
       || initialStyleRef.current.uploadedPreview !== null);
 
+  // 自定义风格文本：模版展开态默认只读，用户显式「脱离模版编辑」或压根没选模版时才可编辑保存。
+  // 用字面 styleTemplateIdRaw（而非 styleValue.templateId）判断——后者在未选模版时会回退
+  // 展示 DEFAULT_TEMPLATE_ID 供选择器高亮默认卡片，不能当作「project.json 里真的选了模版」。
+  const hasTemplateSelected = !!styleTemplateIdRaw;
+  const isCustomStyleEditable = detachedFromTemplate || !hasTemplateSelected;
+  const isCustomStyleDirty = isCustomStyleEditable && customStyleDraft.trim() !== rawStyleText;
+  const selectedTemplateDisplayName = hasTemplateSelected
+    ? t(`templates:name.${styleTemplateIdRaw}`, styleTemplateIdRaw ?? "")
+    : "";
+
   const isDirty =
+    isCustomStyleDirty ||
     videoBackend !== initialRef.current.videoBackend ||
     videoProviderI2V !== initialRef.current.videoProviderI2V ||
     videoProviderR2V !== initialRef.current.videoProviderR2V ||
@@ -410,6 +447,7 @@ export function ProjectSettingsPage() {
     audioBackend !== initialRef.current.audioBackend ||
     narrationVoice !== initialRef.current.narrationVoice ||
     narrationSpeed !== initialRef.current.narrationSpeed ||
+    audience.trim() !== initialRef.current.audience ||
     voiceBinding !== initialRef.current.voiceBinding ||
     textDefault !== initialRef.current.textDefault ||
     textSimple !== initialRef.current.textSimple ||
@@ -428,6 +466,11 @@ export function ProjectSettingsPage() {
 
   const [pendingNavigation, setPendingNavigation] = useState<string | null>(null);
 
+  // React Compiler 在本组件（大量顶层 derived const + hooks）上把 setPendingNavigation
+  // 推断为可省略依赖，与这里手写的 [isDirty, navigate] / [pendingNavigation, navigate]
+  // 不一致，遂放弃自动优化并报 compilation-skipped；手写依赖数组本身是对的（isDirty /
+  // pendingNavigation 都是会变化的普通值，缺了会读到闭包旧值），保留 useCallback 手动记忆化。
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization
   const guardedNavigate = useCallback((path: string) => {
     if (isDirty) {
       setPendingNavigation(path);
@@ -436,6 +479,7 @@ export function ProjectSettingsPage() {
     navigate(path);
   }, [isDirty, navigate]);
 
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization
   const confirmDiscardAndNavigate = useCallback(() => {
     if (!pendingNavigation) return;
     const target = pendingNavigation;
@@ -471,9 +515,17 @@ export function ProjectSettingsPage() {
       }
       // Refetch project to reset styleValue from canonical server state
       const refreshed = await API.getProject(projectName);
-      const nextStyle = deriveStyleValue(refreshed.project as unknown as Record<string, unknown>, projectName);
+      const projectData = refreshed.project as unknown as Record<string, unknown>;
+      const nextStyle = deriveStyleValue(projectData, projectName);
       setStyleValue(nextStyle);
       initialStyleRef.current = nextStyle;
+      // 保持自定义风格文本卡片（styleTemplateIdRaw / rawStyleText）与本次模版/参考图保存同步，
+      // 否则那张卡会展示保存前的旧字面值，直到下次整页重新加载。
+      const nextRawStyle = typeof projectData.style === "string" ? projectData.style : "";
+      setRawStyleText(nextRawStyle);
+      setCustomStyleDraft(nextRawStyle);
+      setStyleTemplateIdRaw(typeof projectData.style_template_id === "string" ? projectData.style_template_id : null);
+      setDetachedFromTemplate(false);
       useAppStore.getState().pushToast(t("saved"), "success");
     } catch (e: unknown) {
       useAppStore.getState().pushToast(t("save_failed", { message: errMsg(e) }), "error");
@@ -481,6 +533,43 @@ export function ProjectSettingsPage() {
       setSavingStyle(false);
     }
   }, [styleValue, projectName, t]);
+
+  const isCustomStyleSaveDisabled =
+    savingCustomStyle || !isCustomStyleEditable || !isCustomStyleDirty || !customStyleDraft.trim();
+
+  const handleDetachFromTemplate = useCallback(() => {
+    setDetachedFromTemplate(true);
+    setCustomStyleDraft(rawStyleText);
+  }, [rawStyleText]);
+
+  const handleSaveCustomStyle = useCallback(async () => {
+    const text = customStyleDraft.trim();
+    if (!text) {
+      useAppStore.getState().pushToast(t("custom_style_text_empty_error"), "error");
+      return;
+    }
+    setSavingCustomStyle(true);
+    try {
+      // style_template_id 未随请求显式带出：后端把「单独 PATCH style」按脱离模版处理，
+      // 自动清掉 style_template_id / style_image / style_description，不必在这里重复传。
+      await API.updateProject(projectName, { style: text });
+      const refreshed = await API.getProject(projectName);
+      const projectData = refreshed.project as unknown as Record<string, unknown>;
+      const nextRawStyle = typeof projectData.style === "string" ? projectData.style : "";
+      setRawStyleText(nextRawStyle);
+      setCustomStyleDraft(nextRawStyle);
+      setStyleTemplateIdRaw(typeof projectData.style_template_id === "string" ? projectData.style_template_id : null);
+      setDetachedFromTemplate(false);
+      const nextStyle = deriveStyleValue(projectData, projectName);
+      setStyleValue(nextStyle);
+      initialStyleRef.current = nextStyle;
+      useAppStore.getState().pushToast(t("saved"), "success");
+    } catch (e: unknown) {
+      useAppStore.getState().pushToast(t("save_failed", { message: errMsg(e) }), "error");
+    } finally {
+      setSavingCustomStyle(false);
+    }
+  }, [customStyleDraft, projectName, t]);
 
   const handleClearStyle = useCallback(() => {
     if (!styleValue) return;
@@ -502,6 +591,7 @@ export function ProjectSettingsPage() {
       // 后端按执行模型查这张表，键位对不上分辨率会被静默忽略。
       // 音色与后端 .strip() 对齐：保存时去首尾空白，避免本地基线带空格而磁盘值不带导致 isDirty 误报
       const trimmedVoice = narrationVoice.trim();
+      const trimmedAudience = audience.trim();
       const executingVideo = executingVideoModel(
         { videoBackend, videoProviderI2V, videoProviderR2V },
         globalDefaults,
@@ -527,6 +617,7 @@ export function ProjectSettingsPage() {
         audio_backend: audioBackend || null,
         narration_voice: trimmedVoice || null,
         narration_speed: narrationSpeed,
+        audience: trimmedAudience,
         // 绑定方式只在参考生视频路线上有效，其余路线该键与项目无关，不写
         ...(generationRoute === "reference_video" ? { character_voice_binding: voiceBinding } : {}),
         // null 即清除项目级覆盖、回退语言默认
@@ -548,10 +639,12 @@ export function ProjectSettingsPage() {
       });
       setModelSettings(newModelSettings);
       setNarrationVoice(trimmedVoice);
+      setAudience(trimmedAudience);
       initialRef.current = {
         videoBackend, videoProviderI2V, videoProviderR2V,
         imageBackendDefault, imageBackendT2I, imageBackendI2I, audioOverride,
         audioBackend, narrationVoice: trimmedVoice, narrationSpeed,
+        audience: trimmedAudience,
         voiceBinding,
         textDefault, textSimple, textComplex,
         aspectRatio, gridStoryboard, defaultDuration, speechRate,
@@ -567,7 +660,7 @@ export function ProjectSettingsPage() {
     } finally {
       setSaving(false);
     }
-  }, [modelSettings, videoBackend, videoProviderI2V, videoProviderR2V, imageBackendDefault, imageBackendT2I, imageBackendI2I, audioOverride, audioBackend, narrationVoice, narrationSpeed, voiceBinding, textDefault, textSimple, textComplex, aspectRatio, generationRoute, gridStoryboard, gridToggleVisible, defaultDuration, speechRate, episodeTargetDuration, contentMode, videoResolution, imageResolution, projectName, t, globalDefaults]);
+  }, [modelSettings, videoBackend, videoProviderI2V, videoProviderR2V, imageBackendDefault, imageBackendT2I, imageBackendI2I, audioOverride, audioBackend, narrationVoice, narrationSpeed, audience, voiceBinding, textDefault, textSimple, textComplex, aspectRatio, generationRoute, gridStoryboard, gridToggleVisible, defaultDuration, speechRate, episodeTargetDuration, contentMode, videoResolution, imageResolution, projectName, t, globalDefaults]);
 
   const handleResetAgentProfile = useCallback(async () => {
     if (profileResetProject !== projectName) {
@@ -755,6 +848,62 @@ export function ProjectSettingsPage() {
             </SectionCard>
           )}
 
+          {/* Custom style text (independent save flow, detaches from template on save) */}
+          {styleValue && (
+            <SectionCard
+              kicker="Custom Style"
+              title={t("custom_style_text_section_title")}
+              description={t("custom_style_text_section_desc")}
+              footer={
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    // handleSaveCustomStyle 在 onClick 时才执行，ref 写入是合法的；规则误报。
+                    // eslint-disable-next-line react-hooks/refs
+                    onClick={voidPromise(handleSaveCustomStyle)}
+                    disabled={isCustomStyleSaveDisabled}
+                    className={ACCENT_BTN_CLS}
+                    style={ACCENT_BUTTON_STYLE}
+                  >
+                    {savingCustomStyle && (
+                      <Loader2 aria-hidden className="h-3.5 w-3.5 motion-safe:animate-spin" />
+                    )}
+                    {savingCustomStyle ? t("custom_style_text_saving") : t("custom_style_text_save")}
+                  </button>
+                </div>
+              }
+            >
+              {hasTemplateSelected && !detachedFromTemplate ? (
+                <div className="space-y-3">
+                  <p className="text-[12px] leading-[1.55] text-text-3">
+                    {t("custom_style_text_detached_from_template", { template: selectedTemplateDisplayName })}
+                  </p>
+                  <textarea
+                    readOnly
+                    value={rawStyleText}
+                    rows={6}
+                    className="w-full rounded-[8px] border border-hairline bg-bg-grad-a/40 px-3 py-2 text-[12.5px] leading-[1.55] text-text-3"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleDetachFromTemplate}
+                    className={GHOST_BTN_LG_CLS}
+                  >
+                    {t("custom_style_text_detach_button")}
+                  </button>
+                </div>
+              ) : (
+                <textarea
+                  value={customStyleDraft}
+                  onChange={(e) => setCustomStyleDraft(e.target.value)}
+                  rows={6}
+                  placeholder={t("custom_style_text_placeholder")}
+                  className="w-full rounded-[8px] border border-hairline bg-bg-grad-a/40 px-3 py-2 text-[12.5px] leading-[1.55] text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                />
+              )}
+            </SectionCard>
+          )}
+
           {options && (
             <>
               {/* Model config (video + duration + image + text) */}
@@ -912,6 +1061,26 @@ export function ProjectSettingsPage() {
                     />
                   </div>
                 )}
+              </SectionCard>
+
+              {/* 目标受众：自由文本，注入脚本 / 资产 / 分镜 / 视频 prompt；空 = 未设，
+                  提示词层不渲染受众专属规则块 */}
+              <SectionCard kicker="Audience" title={t("audience_title")} description={t("audience_desc")}>
+                <label
+                  htmlFor="project-audience"
+                  className="mb-1.5 block font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-text-4"
+                >
+                  {t("audience_label")}
+                </label>
+                <input
+                  id="project-audience"
+                  type="text"
+                  value={audience}
+                  onChange={(e) => setAudience(e.target.value)}
+                  placeholder={t("audience_placeholder")}
+                  className="w-full rounded-[8px] border border-hairline bg-bg-grad-a/55 px-3 py-2 text-[12.5px] text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                />
+                <p className="mt-1 text-[11px] text-text-4">{t("audience_hint")}</p>
               </SectionCard>
 
               {/* 角色声音绑定方式：只在参考生视频路线有效——参考音频通道属于该路线，

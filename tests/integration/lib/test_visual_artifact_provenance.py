@@ -39,7 +39,14 @@ def test_asset_sheet_visual_basis_tracks_only_formal_visual_inputs(tmp_path: Pat
     same_reference.write_bytes(b"same visual bytes")
     changed_reference.write_bytes(b"changed visual bytes")
 
-    def build(reference: Path, *, description: str = "银发旅人", aspect_ratio: str = "16:9", style: str = "水墨"):
+    def build(
+        reference: Path,
+        *,
+        description: str = "银发旅人",
+        aspect_ratio: str = "16:9",
+        style: str = "水墨",
+        audience: str = "",
+    ):
         return build_asset_sheet_visual_basis(
             asset_type=asset_type,
             asset_id="Hiếu",
@@ -56,6 +63,7 @@ def test_asset_sheet_visual_basis_tracks_only_formal_visual_inputs(tmp_path: Pat
                     kind="original",
                 ),
             ),
+            audience=audience,
         )
 
     baseline = build(first_reference)
@@ -64,10 +72,14 @@ def test_asset_sheet_visual_basis_tracks_only_formal_visual_inputs(tmp_path: Pat
     assert build(changed_reference).digest != baseline.digest
     assert build(first_reference, description="黑发旅人").digest != baseline.digest
     assert build(first_reference, aspect_ratio="9:16").digest != baseline.digest
+    # 未设受众（audience=""）与不带该参数逐字相同，产物不会因为这次改动无端过期
+    assert build(first_reference).digest == baseline.digest
     if asset_type == "product":
         assert build(first_reference, style="写实摄影").digest == baseline.digest
+        assert build(first_reference, audience="儿童 6-10 岁").digest == baseline.digest
     else:
         assert build(first_reference, style="写实摄影").digest != baseline.digest
+        assert build(first_reference, audience="儿童 6-10 岁").digest != baseline.digest
 
 
 def test_asset_sheet_visual_basis_uses_canonical_asset_identity(tmp_path: Path) -> None:
@@ -182,6 +194,23 @@ def test_storyboard_image_basis_projects_content_canvas_and_actual_references(tm
     assert build(style="水墨").digest == baseline.digest
     assert build(sheet=changed_sheet).digest != baseline.digest
     assert build(aspect_ratio="9:16").digest != baseline.digest
+    # 未设受众（默认参数）与显式空串逐字相同，存量项目不会无端过期
+    assert (
+        build_storyboard_image_visual_basis(
+            resource_id="E1S01",
+            image_prompt={
+                "scene": "阿黎站在雨中",
+                "composition": {"shot_type": "Medium Shot", "lighting": "冷光", "ambiance": "压抑"},
+            },
+            style="画风：水墨",
+            aspect_ratio="16:9",
+            references=(
+                VisualReference(path=character_sheet, role="asset_sheet", logical_type="character", logical_id="阿黎"),
+            ),
+            audience="",
+        ).digest
+        == baseline.digest
+    )
     assert (
         build(
             image_prompt={
@@ -210,9 +239,13 @@ def test_storyboard_text_basis_tracks_the_style_sent_to_the_request(tmp_path: Pa
     first = build_storyboard_image_visual_basis(style="水墨", style_description="柔光", **kwargs)
     changed_style = build_storyboard_image_visual_basis(style="写实", style_description="柔光", **kwargs)
     changed_description = build_storyboard_image_visual_basis(style="水墨", style_description="硬光", **kwargs)
+    changed_audience = build_storyboard_image_visual_basis(
+        style="水墨", style_description="柔光", audience="儿童 6-10 岁", **kwargs
+    )
 
     assert changed_style.digest != first.digest
     assert changed_description.digest != first.digest
+    assert changed_audience.digest != first.digest
 
 
 @pytest.mark.parametrize(
@@ -532,12 +565,14 @@ def test_reference_video_visual_basis_uses_unit_visual_text_and_actual_request_a
         current_assets: tuple[ResolvedReferenceAsset, ...] = request_assets,
         style: str = "画风：水墨",
         aspect_ratio: str = "9:16",
+        audience: str | None = None,
     ):
         return build_reference_video_artifact_visual_basis(
             unit=current_unit,
             request_assets=current_assets,
             style=style,
             aspect_ratio=aspect_ratio,
+            audience=audience,
         )
 
     baseline = build()
@@ -576,6 +611,9 @@ def test_reference_video_visual_basis_uses_unit_visual_text_and_actual_request_a
     assert build(current_unit={**unit, "unit_id": "E1U02"}).digest != baseline.digest
     assert build(style="写实").digest != baseline.digest
     assert build(aspect_ratio="16:9").digest != baseline.digest
+    # 未设受众（None）与显式空串逐字相同，存量项目不会无端过期；一旦设置则改变依据
+    assert build(audience="").digest == baseline.digest
+    assert build(audience="儿童 6-10 岁").digest != baseline.digest
 
     clamped.write_bytes(b"changed-but-still-clamped")
 

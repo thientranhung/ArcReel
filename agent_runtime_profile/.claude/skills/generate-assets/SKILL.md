@@ -121,6 +121,14 @@ description: >-
 - 编辑不会更新 `description` / prompt——编辑后再触发 `generate_assets` 仍按原 description
   重画，编辑效果只能从版本历史找回
 
+## 视觉质检（可选）
+
+生成完成后，可用 `mcp__arcreel__run_visual_qa({"resource_type": "character", "ids": ["张三"]})`
+对刚出的资产图做一次视觉复核（`resource_type` 支持 `character` / `scene` / `prop`）。
+只读：不生成新图、不入生成队列，返回每个 id 的四维评分（content / asset / style / audience）
+与 `verdict`（pass / regenerate）。`verdict` 为 `regenerate` 时，其 `notes` 字段写的是具体
+修改建议，可以直接原样作为 `edit_images` 的 `instruction` 使用。
+
 ## 质量检查
 
 - **角色**：三个面板（正面 / 正侧 / 背面）的面部、发型、服装、配饰完全一致

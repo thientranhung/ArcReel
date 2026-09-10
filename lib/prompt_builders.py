@@ -43,20 +43,25 @@ _SCENE_LAYOUT = "单张环境全景建立镜头。"
 _PROP_LAYOUT = "单张道具资产图，纯净浅灰背景。"
 _PRODUCT_LAYOUT = "单张商品资产图，纯净浅灰背景、均匀棚拍布光。"
 
-# 正向防崩（按资产类型差异化）。
-_CHARACTER_GUARD = "三个面板中角色面部、发型、服装、配饰完全一致。"
+# 正向防崩（按资产类型差异化）。资产图是身份锚定的稳定态，姿态/表情/道具/环境这些易变信息
+# 会在分镜阶段单独表达，写进资产图会污染下游资产图裁切复用（见
+# docs/research/learn-from-waoowaoo-2026-09-10.md §1.1-1.2）。
+_CHARACTER_GUARD = (
+    "三个面板中角色面部、发型、服装、配饰完全一致；角色呈中性表情、中性站姿，不手持道具，不出现背景或环境元素。"
+)
 # 场景 description 由剧本提取，常包含人物动作与剧情事件，仅靠末尾的反向提示词不足以抵消
-# 描述中的正向叙述，因此在正向语句中再声明一次无人。道具是纯文生图、description 描述的是
-# 物件本身，layout 也已限定纯净背景，不存在同类冲突，只需反向提示词；商品另有实拍
-# 参考图这条通道，其正向声明见 _PRODUCT_GUARD。
-_SCENE_GUARD = "画面中没有人物出镜。"
+# 描述中的正向叙述，因此在正向语句中再声明一次无人；同理正向声明不画标签/箭头/占位符，
+# 这类图形元素常见于剧本描述里的「示意」措辞，反向提示词压不住。道具的正向声明限定单个
+# 道具居中、不出现手部/人物/环境，排除 description 里可能残留的握持或场景措辞；商品另有
+# 实拍参考图这条通道，其正向声明见 _PRODUCT_GUARD。
+_SCENE_GUARD = "画面中没有人物出镜，不出现标签、箭头或占位符文字。"
 # 衍生资产图是对本体资产图的图片编辑，守卫句限定「只改被描述到的部分」：版式与其余外观
 # 保持不变，否则同一角色的两种形态会在分镜里长成两个人。
 _CHARACTER_DERIVATIVE_GUARD = (
     "保持原图的三视图版式（正面 / 正侧 / 背面水平排列）、构图、比例、取景与纯白背景不变；"
     "除上述变化外，角色的面部、发型、体型及其余外观一律与原图保持一致。"
 )
-_PROP_GUARD = ""
+_PROP_GUARD = "单个道具居中呈现，不出现手部、人物或环境背景。"
 # 商品保真核心句：sheet 生成守卫与参考生视频的商品保真指令共用，调优措辞只改这一处。
 PRODUCT_FIDELITY_CORE = "logo、文字、配色、材质、比例与结构不得改变或臆造"
 # product sheet 由实拍原图整理而来，原图全量作为 i2i 参考注入（generation_tasks.py 的
@@ -84,13 +89,20 @@ _NEGATIVE_TAIL_STORYBOARD = yaml_section({AVOID_KEY: STORYBOARD_AVOID_ITEMS})
 _NEGATIVE_TAIL_VIDEO = yaml_section({AVOID_KEY: VIDEO_AVOID_ITEMS})
 
 
-def _style_prefix(style: str = "", style_description: str = "") -> str:
-    """组合视觉风格前缀。两者都为空时返回空串。"""
+def _style_prefix(style: str = "", style_description: str = "", audience: str = "") -> str:
+    """组合视觉风格前缀。三者都为空时返回空串。
+
+    ``audience`` 是原始受众文本（未经 ``render_audience_section`` 的 gear 判定），单行「目标受众：…」，
+    与风格前缀同段落——资产图 prompt 无「视觉规则」这类长段落结构，不适合插入完整 gear 规则块，
+    只注入受众信息本身供模型据此调整画风（如儿童向配色更明亮）。空则不渲染，与不带该参数时逐字相同。
+    """
     parts = []
     if style:
         parts.append(f"风格：{style}")
     if style_description:
         parts.append(f"描述：{style_description}")
+    if audience and audience.strip():
+        parts.append(f"目标受众：{audience.strip()}")
     if not parts:
         return ""
     return "\n".join(parts) + "\n\n"
@@ -101,9 +113,11 @@ def _style_prefix(style: str = "", style_description: str = "") -> str:
 # ---------------------------------------------------------------------------
 
 
-def build_character_prompt(name: str, description: str, style: str = "", style_description: str = "") -> str:
+def build_character_prompt(
+    name: str, description: str, style: str = "", style_description: str = "", audience: str = ""
+) -> str:
     """角色资产图 prompt（三视图 16:9）。"""
-    style_block = _style_prefix(style, style_description)
+    style_block = _style_prefix(style, style_description, audience)
     return (
         f"{style_block}"
         f"角色「{name}」的资产图。\n\n"
@@ -123,9 +137,11 @@ def build_character_derivative_prompt(description: str) -> str:
     return f"{description}\n\n{_CHARACTER_DERIVATIVE_GUARD}\n\n{_NEGATIVE_TAIL_CHARACTER}"
 
 
-def build_scene_prompt(name: str, description: str, style: str = "", style_description: str = "") -> str:
+def build_scene_prompt(
+    name: str, description: str, style: str = "", style_description: str = "", audience: str = ""
+) -> str:
     """场景资产图 prompt（单图）。"""
-    style_block = _style_prefix(style, style_description)
+    style_block = _style_prefix(style, style_description, audience)
     return (
         f"{style_block}"
         f"场景「{name}」的资产图。\n\n"
@@ -136,9 +152,11 @@ def build_scene_prompt(name: str, description: str, style: str = "", style_descr
     )
 
 
-def build_prop_prompt(name: str, description: str, style: str = "", style_description: str = "") -> str:
+def build_prop_prompt(
+    name: str, description: str, style: str = "", style_description: str = "", audience: str = ""
+) -> str:
     """道具资产图 prompt（单图）。"""
-    style_block = _style_prefix(style, style_description)
+    style_block = _style_prefix(style, style_description, audience)
     guard_block = f"{_PROP_GUARD}\n\n" if _PROP_GUARD else ""
     return (
         f"{style_block}"
@@ -178,6 +196,7 @@ def render_storyboard_image_prompt(
     style: str = "",
     style_description: str = "",
     references: Sequence[ReferenceImageSlot] = (),
+    audience: str = "",
 ) -> str:
     """分镜图最终提示词文本的唯一出口。
 
@@ -186,21 +205,29 @@ def render_storyboard_image_prompt(
     是实际随请求发出的参考图列表（编排层最终装配序），其位置即「图N」编号：类型声明行
     ``Reference_Images`` 插在 ``Style`` 与 ``Scene`` 之间，正文的 ``@[名称]`` 换成对应编号、对不上
     的渲染为裸名；没有参考图就没有声明行。商品参考图的保真要求并入声明行。
+
+    ``audience`` 是目标受众原始文本，非空时紧跟在 ``Style`` 之后注入 ``Audience`` 键（结构形态）
+    或 ``Audience: ...`` 行（文本形态）；空则不注入，与不带该参数时逐字相同。
     """
 
     if not is_str(style_description):
         raise TypeError("style_description must be a string")
     projected, normalized_style = project_storyboard_image_prompt(image_prompt, style)
     declaration = reference_images_declaration(references)
+    normalized_audience = audience.strip()
 
     style_parts: list[str] = []
     if isinstance(projected, dict):
         projected["scene"] = render_reference_mentions(projected["scene"], references)
-        rendered = image_prompt_to_yaml(projected, normalized_style, reference_images=declaration).rstrip()
+        rendered = image_prompt_to_yaml(
+            projected, normalized_style, reference_images=declaration, audience=normalized_audience
+        ).rstrip()
     else:
         rendered = render_reference_mentions(projected, references)
         if normalized_style:
             style_parts.append(f"Style: {normalized_style}")
+        if normalized_audience:
+            style_parts.append(f"Audience: {normalized_audience}")
     normalized_description = style_description.strip()
     if normalized_description:
         style_parts.append(f"Visual style: {normalized_description}")

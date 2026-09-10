@@ -8,6 +8,8 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import ClassVar, Literal
 
+from openai import APIConnectionError
+
 from lib.aspect_size import IMAGE_TIER_SHORT_EDGE, aspect_size, resolution_to_short_edge
 from lib.image_backends.base import (
     ImageCapability,
@@ -21,11 +23,12 @@ from lib.openai_shared import (
     OPENAI_IMAGE_QUALITY_MAP as _QUALITY_MAP,
 )
 from lib.openai_shared import (
-    OPENAI_RETRYABLE_ERRORS,
     create_openai_client,
+    should_retry_openai_submit,
 )
 from lib.providers import PROVIDER_OPENAI
 from lib.retry import with_retry_async
+from lib.video_backends.base import AmbiguousSubmitError
 
 logger = logging.getLogger(__name__)
 
@@ -117,8 +120,9 @@ class OpenAIImageBackend:
     def max_reference_images(self) -> int:
         return _MAX_REFERENCE_IMAGES
 
-    @with_retry_async(retryable_errors=OPENAI_RETRYABLE_ERRORS)
+    @with_retry_async(retry_if=should_retry_openai_submit)
     async def generate(self, request: ImageGenerationRequest) -> ImageGenerationResult:
+        """生成图片（非幂等「创建 + 计费」调用），重试判据见 ``should_retry_openai_submit``。"""
         has_refs = bool(request.reference_images)
         if has_refs and ImageCapability.IMAGE_TO_IMAGE not in self._capabilities:
             raise ImageCapabilityError("image_endpoint_mismatch_no_i2i", model=self._model)
@@ -134,7 +138,12 @@ class OpenAIImageBackend:
         }
         kwargs.update(_resolve_openai_params(request.image_size, request.aspect_ratio))
         logger.info("调用 %s 图片 SDK (T2I) kwargs=%s", self.name, format_kwargs_for_log(kwargs))
-        response = await self._client.images.generate(**kwargs)
+        try:
+            response = await self._client.images.generate(**kwargs)
+        except APIConnectionError as exc:
+            # 含子类 APITimeoutError：SDK 不区分连接建立失败与发出后超时/中断，保守按
+            # 「可能已送达并计费」处理，转 AmbiguousSubmitError 终态失败，不自动重试。
+            raise AmbiguousSubmitError(provider=PROVIDER_OPENAI) from exc
         return await self._save_and_return(response, request)
 
     async def _generate_edit(self, request: ImageGenerationRequest) -> ImageGenerationResult:
@@ -183,7 +192,13 @@ class OpenAIImageBackend:
                 self.name,
                 format_kwargs_for_log({**edit_kwargs, "image": f"<{len(image_files)} files>"}),
             )
-            response = await self._client.images.edit(**edit_kwargs)
+            try:
+                response = await self._client.images.edit(**edit_kwargs)
+            except APIConnectionError as exc:
+                # 与 _generate_create 同理：含子类 APITimeoutError，SDK 不区分连接建立失败与
+                # 发出后超时/中断，保守按「可能已送达并计费」处理，转 AmbiguousSubmitError
+                # 终态失败，不自动重试。
+                raise AmbiguousSubmitError(provider=PROVIDER_OPENAI) from exc
         finally:
             stack.close()
         return await self._save_and_return(response, request)

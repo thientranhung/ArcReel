@@ -52,6 +52,7 @@ from lib.episode_target_duration import (
 from lib.i18n import Translator
 from lib.json_io import domain_error_on_value_error
 from lib.profile_manifest import ContentMode
+from lib.project_audience import PROJECT_AUDIENCE_FIELD
 from lib.project_change_hints import project_change_source
 from lib.project_manager import EmptySourceError, EpisodeScriptReboundError, SourceKind, get_project_manager
 from lib.script_batch_edit import ScriptBatchEditCommand, ScriptBatchEditor, script_revision
@@ -222,6 +223,8 @@ class CreateProjectRequest(BaseModel):
     target_duration: int | None = Field(default=None, gt=0)
     # 仅 content_mode=ad：创作诉求短文本（可空，不走 source_loader）
     brief: str | None = None
+    # 目标受众（可选，自由文本，如「儿童 6-10 岁」）：留空则不落盘，读时按未设处理
+    audience: str | None = None
     # 生成模式：创建时必须显式选择 storyboard 或 reference_video；缺失或旧 grid 值由
     # Pydantic 校验返回 422。创建后不可更改（PATCH 模型结构上无此字段）。
     generation_mode: Literal["storyboard", "reference_video"]
@@ -291,6 +294,8 @@ class UpdateProjectRequest(BaseModel):
     default_text_backend: str | None = None
     style_template_id: str | None = None
     clear_style_image: bool | None = None
+    # 目标受众（可选，自由文本）：空串 = 清除回落未设；null 视为未提供字段，靠 model_fields_set 区分
+    audience: str | None = None
     episodes: list[EpisodePatch] | None = None
     model_settings: dict[str, dict[str, str | None]] | None = None
 
@@ -692,6 +697,9 @@ async def create_project(
             extras = {field: value for field in _PROJECT_BACKEND_FIELDS if (value := getattr(req, field))}
             if req.model_settings is not None:
                 extras["model_settings"] = req.model_settings
+            audience_text = (req.audience or "").strip()
+            if audience_text:
+                extras[PROJECT_AUDIENCE_FIELD] = audience_text
             # 生成模式与宫格开关并入 extras 一次性写入，避免 create 后再 load-save 的额外 RMW；
             # 两字段恒写显式值（grid_storyboard 默认 false 也落盘），新项目即 v5 完整形态
             extras["generation_mode"] = req.generation_mode
@@ -938,6 +946,15 @@ async def update_project(name: str, req: UpdateProjectRequest, _t: Translator):
                     project["title"] = req.title
                 if req.style is not None:
                     project["style"] = req.style
+                    # 自由文本风格与「选中内置模版」/「上传自定义参考图」三选一互斥：单独 PATCH
+                    # style（不在同一请求里显式带 style_template_id）时按「脱离模版改自定义」
+                    # 处理，清掉指向已不匹配 style 文本的 style_template_id 及参考图痕迹，避免
+                    # style_template_id 残留但展开文本已被覆盖的孤儿态。请求同时显式给了
+                    # style_template_id 时以下方模版分支为准，不在这里重复处理。
+                    if "style_template_id" not in req.model_fields_set:
+                        project.pop("style_template_id", None)
+                        project.pop("style_image", None)
+                        project.pop("style_description", None)
                 for field in (*_PROJECT_BACKEND_FIELDS, "audio_backend"):
                     if field in req.model_fields_set:
                         value = getattr(req, field)
@@ -1019,6 +1036,13 @@ async def update_project(name: str, req: UpdateProjectRequest, _t: Translator):
                     if not is_ad:
                         raise HTTPException(status_code=400, detail=_t("ad_only_field", field="brief"))
                     project["brief"] = req.brief if req.brief is not None else ""
+                # 目标受众：自由文本，空串 / null 一律清除回落未设（与 narration_voice 同口径）
+                if "audience" in req.model_fields_set:
+                    audience_text = (req.audience or "").strip()
+                    if audience_text:
+                        project[PROJECT_AUDIENCE_FIELD] = audience_text
+                    else:
+                        project.pop(PROJECT_AUDIENCE_FIELD, None)
 
                 if "style_template_id" in req.model_fields_set:
                     if req.style_template_id is None:
@@ -1253,10 +1277,14 @@ async def update_scene(
                 "segment_break",
                 "utterances",
                 "note",
+                "audio_mode",
             }
+            # note / audio_mode 允许显式写回 null（清空备注 / 重置为整集默认声音归属）；
+            # 其余字段的 null 视为未提供,不参与本次 PATCH。
+            _nullable = {"note", "audio_mode"}
             fields: dict[str, Any] = {}
             for key, raw_value in req.updates.items():
-                if key not in allowed or (raw_value is None and key != "note"):
+                if key not in allowed or (raw_value is None and key not in _nullable):
                     continue
                 value = raw_value
                 if key in {"characters_in_scene", "scenes", "props"} and isinstance(value, list):
@@ -1467,6 +1495,7 @@ class UpdateSegmentRequest(BaseModel):
     video_prompt: dict | str | None = None
     transition_to_next: str | None = None
     note: str | None = None
+    audio_mode: str | None = None
     characters_in_segment: list[str] | None = None
     scenes: list[str] | None = None
     props: list[str] | None = None
@@ -1525,6 +1554,8 @@ async def update_segment(
                     fields[field] = value
             if "note" in req.model_fields_set:
                 fields["note"] = req.note
+            if "audio_mode" in req.model_fields_set:
+                fields["audio_mode"] = req.audio_mode
             for field in ("characters_in_segment", "scenes", "props"):
                 if field in req.model_fields_set:
                     fields[field] = [asset_name_comparison_key(value) for value in (getattr(req, field) or [])]

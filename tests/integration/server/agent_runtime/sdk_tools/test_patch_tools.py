@@ -1498,6 +1498,135 @@ class TestPatchProjectSettings:
         out = await _call(patch_project_tool(ctx), {"settings": {}})
         assert out.get("is_error") is True
 
+
+class TestPatchProjectStyleSetting:
+    """settings.style：自由文本风格，写入即与模版/自定义参考图互斥。"""
+
+    async def test_set_free_text_style(self, ctx: ToolContext) -> None:
+        out = await _call(patch_project_tool(ctx), {"settings": {"style": "3D 皮克斯风格渲染，柔和体积光"}})
+        assert out.get("is_error") is not True
+        assert ctx.pm.load_project("demo")["style"] == "3D 皮克斯风格渲染，柔和体积光"
+
+    async def test_setting_style_clears_style_template_id(self, ctx: ToolContext) -> None:
+        ctx.pm.update_project(
+            "demo",
+            lambda project: project.update({"style_template_id": "anime-cel", "style": "模版展开文本"}),
+        )
+        out = await _call(patch_project_tool(ctx), {"settings": {"style": "自定义长文本风格"}})
+        assert out.get("is_error") is not True
+        project = ctx.pm.load_project("demo")
+        assert project["style"] == "自定义长文本风格"
+        assert "style_template_id" not in project
+
+    async def test_setting_style_clears_style_image_and_description(self, ctx: ToolContext) -> None:
+        ctx.pm.update_project(
+            "demo",
+            lambda project: project.update({"style_image": "style/ref.png", "style_description": "上传的参考图描述"}),
+        )
+        out = await _call(patch_project_tool(ctx), {"settings": {"style": "自定义长文本风格"}})
+        assert out.get("is_error") is not True
+        project = ctx.pm.load_project("demo")
+        assert "style_image" not in project
+        assert "style_description" not in project
+
+    @pytest.mark.parametrize("bad", [None, "", "   ", 1, True, ["x"]])
+    async def test_invalid_style_rejected(self, ctx: ToolContext, bad: Any) -> None:
+        before = ctx.pm.load_project("demo").get("style")
+        out = await _call(patch_project_tool(ctx), {"settings": {"style": bad}})
+        assert out.get("is_error") is True
+        assert ctx.pm.load_project("demo").get("style") == before
+
+
+class TestPatchProjectAudienceSetting:
+    """settings.audience：自由文本目标受众，空字符串与 null 同义、一律清除。"""
+
+    async def test_set_audience(self, ctx: ToolContext) -> None:
+        out = await _call(patch_project_tool(ctx), {"settings": {"audience": "儿童 6-10 岁"}})
+        assert out.get("is_error") is not True
+        assert ctx.pm.load_project("demo")["audience"] == "儿童 6-10 岁"
+
+    async def test_set_audience_strips_whitespace(self, ctx: ToolContext) -> None:
+        out = await _call(patch_project_tool(ctx), {"settings": {"audience": "  儿童 6-10 岁  "}})
+        assert out.get("is_error") is not True
+        assert ctx.pm.load_project("demo")["audience"] == "儿童 6-10 岁"
+
+    async def test_clear_audience_with_null(self, ctx: ToolContext) -> None:
+        ctx.pm.update_project("demo", lambda project: project.update({"audience": "儿童 6-10 岁"}))
+        out = await _call(patch_project_tool(ctx), {"settings": {"audience": None}})
+        assert out.get("is_error") is not True
+        assert "audience" not in ctx.pm.load_project("demo")
+
+    async def test_clear_audience_with_empty_string(self, ctx: ToolContext) -> None:
+        ctx.pm.update_project("demo", lambda project: project.update({"audience": "儿童 6-10 岁"}))
+        out = await _call(patch_project_tool(ctx), {"settings": {"audience": ""}})
+        assert out.get("is_error") is not True
+        assert "audience" not in ctx.pm.load_project("demo")
+
+    @pytest.mark.parametrize("bad", [1, True, ["x"], {"a": 1}])
+    async def test_invalid_audience_rejected(self, ctx: ToolContext, bad: Any) -> None:
+        before = ctx.pm.load_project("demo").get("audience")
+        out = await _call(patch_project_tool(ctx), {"settings": {"audience": bad}})
+        assert out.get("is_error") is True
+        assert ctx.pm.load_project("demo").get("audience") == before
+
+
+class TestPatchProjectBackendSettings:
+    """settings.video_backend / image_provider_t2i / image_provider_i2i：provider/model 校验。"""
+
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            ("video_backend", "ark/doubao-seedance-1-5-pro-251215"),
+            ("image_provider_t2i", "ark/doubao-seedream-5-0-lite-260128"),
+            ("image_provider_i2i", "ark/doubao-seedream-5-0-lite-260128"),
+        ],
+    )
+    async def test_set_valid_backend(self, ctx: ToolContext, key: str, value: str) -> None:
+        out = await _call(patch_project_tool(ctx), {"settings": {key: value}})
+        assert out.get("is_error") is not True
+        assert ctx.pm.load_project("demo")[key] == value
+
+    @pytest.mark.parametrize("key", ["video_backend", "image_provider_t2i", "image_provider_i2i"])
+    async def test_clear_backend(self, ctx: ToolContext, key: str) -> None:
+        await _call(patch_project_tool(ctx), {"settings": {key: "ark/doubao-seedance-1-5-pro-251215"}})
+        out = await _call(patch_project_tool(ctx), {"settings": {key: None}})
+        assert out.get("is_error") is not True
+        assert key not in ctx.pm.load_project("demo")
+
+    async def test_bare_provider_id_accepted(self, ctx: ToolContext) -> None:
+        """裸 provider（无 "/"）合法：回退该 provider 的默认模型，与 REST PATCH 同口径。"""
+        out = await _call(patch_project_tool(ctx), {"settings": {"video_backend": "ark"}})
+        assert out.get("is_error") is not True
+        assert ctx.pm.load_project("demo")["video_backend"] == "ark"
+
+    @pytest.mark.parametrize("key", ["video_backend", "image_provider_t2i", "image_provider_i2i"])
+    async def test_unknown_provider_rejected(self, ctx: ToolContext, key: str) -> None:
+        before = ctx.pm.load_project("demo").get(key)
+        out = await _call(patch_project_tool(ctx), {"settings": {key: "not-a-real-provider/some-model"}})
+        assert out.get("is_error") is True
+        assert "not-a-real-provider" in _text(out)
+        assert ctx.pm.load_project("demo").get(key) == before
+
+    async def test_legacy_provider_name_rejected(self, ctx: ToolContext) -> None:
+        """legacy provider 名（迁移前旧 id）一律拒绝，与 REST PATCH / validate_backend_value 同口径。"""
+        out = await _call(patch_project_tool(ctx), {"settings": {"video_backend": "seedance/some-model"}})
+        assert out.get("is_error") is True
+
+    async def test_media_type_mismatch_rejected(self, ctx: ToolContext) -> None:
+        """video_backend 传图片模型：media_type 不匹配即拒。"""
+        out = await _call(
+            patch_project_tool(ctx),
+            {"settings": {"video_backend": "ark/doubao-seedream-5-0-lite-260128"}},
+        )
+        assert out.get("is_error") is True
+
+    @pytest.mark.parametrize("key", ["video_backend", "image_provider_t2i", "image_provider_i2i"])
+    @pytest.mark.parametrize("bad", ["", "   ", 1, True, ["x"]])
+    async def test_invalid_backend_type_rejected(self, ctx: ToolContext, key: str, bad: Any) -> None:
+        out = await _call(patch_project_tool(ctx), {"settings": {key: bad}})
+        assert out.get("is_error") is True
+        assert key not in ctx.pm.load_project("demo")
+
     async def test_legacy_upsert_path_still_works(self, ctx: ToolContext) -> None:
         """老 schema 回归:只传 table/entries 仍走 upsert 分支(向后兼容 8 处既有调用)."""
         out = await _call(

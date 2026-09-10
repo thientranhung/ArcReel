@@ -173,6 +173,8 @@ export interface ProjectData {
   target_duration?: number;
   /** 仅 ad：创作诉求短文本（可空）。 */
   brief?: string;
+  /** 目标受众（可选，自由文本，如「儿童 6-10 岁」）：注入脚本/资产/分镜/视频提示词，未设不影响生成。 */
+  audience?: string;
   schema_version?: number;
   episodes: EpisodeMeta[];
   characters: Record<string, Character>;

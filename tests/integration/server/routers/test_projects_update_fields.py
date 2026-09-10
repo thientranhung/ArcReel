@@ -29,6 +29,40 @@ class TestProjectsRouter:
             assert "style_image" not in data
             assert "style_description" not in data
 
+    def test_update_project_with_free_text_style_clears_template_and_image(self, tmp_path, monkeypatch):
+        """PATCH style（不带 style_template_id）：脱离模版/参考图改自定义文本，三者互斥。"""
+        fake_pm = _FakePM(tmp_path)
+        fake_pm.project_data["ready"]["style_template_id"] = "live_zhang_yimou"
+        fake_pm.project_data["ready"]["style_image"] = "style_reference.png"
+        fake_pm.project_data["ready"]["style_description"] = "old desc"
+
+        client = build_projects_client(monkeypatch, fake_pm)
+        with client:
+            resp = client.patch(
+                "/api/v1/projects/ready",
+                json={"style": "自定义长文本风格描述"},
+            )
+            assert resp.status_code == 200
+            data = fake_pm.project_data["ready"]
+            assert data["style"] == "自定义长文本风格描述"
+            assert "style_template_id" not in data
+            assert "style_image" not in data
+            assert "style_description" not in data
+
+    def test_update_project_style_and_style_template_id_together_prefers_template(self, tmp_path, monkeypatch):
+        """同一请求既传 style 又显式传 style_template_id：以模版分支为准（style 不被互斥清理）。"""
+        fake_pm = _FakePM(tmp_path)
+        client = build_projects_client(monkeypatch, fake_pm)
+        with client:
+            resp = client.patch(
+                "/api/v1/projects/ready",
+                json={"style": "将被模版覆盖", "style_template_id": "live_zhang_yimou"},
+            )
+            assert resp.status_code == 200
+            data = fake_pm.project_data["ready"]
+            assert data["style_template_id"] == "live_zhang_yimou"
+            assert "张艺谋" in data["style"]
+
     def test_update_project_with_unknown_template_id_returns_400(self, tmp_path, monkeypatch):
         client = build_projects_client(monkeypatch, _FakePM(tmp_path))
         with client:
@@ -71,6 +105,25 @@ class TestProjectsRouter:
             data = fake_pm.project_data["ready"]
             assert "style_image" not in data
             assert "style_description" not in data
+
+    def test_update_project_persists_audience(self, tmp_path, monkeypatch):
+        """PATCH audience：写入目标受众自由文本。"""
+        fake_pm = _FakePM(tmp_path)
+        client = build_projects_client(monkeypatch, fake_pm)
+        with client:
+            resp = client.patch("/api/v1/projects/ready", json={"audience": "儿童 6-10 岁"})
+            assert resp.status_code == 200
+            assert fake_pm.project_data["ready"]["audience"] == "儿童 6-10 岁"
+
+    def test_update_project_clears_audience_with_empty_string(self, tmp_path, monkeypatch):
+        """PATCH audience=""：清除已设的目标受众。"""
+        fake_pm = _FakePM(tmp_path)
+        fake_pm.project_data["ready"]["audience"] = "儿童 6-10 岁"
+        client = build_projects_client(monkeypatch, fake_pm)
+        with client:
+            resp = client.patch("/api/v1/projects/ready", json={"audience": ""})
+            assert resp.status_code == 200
+            assert "audience" not in fake_pm.project_data["ready"]
 
     def test_update_project_persists_narration_overrides(self, tmp_path, monkeypatch):
         """PATCH 旁白配音项目级覆盖：audio_backend / narration_voice / narration_speed 写入 project.json。"""

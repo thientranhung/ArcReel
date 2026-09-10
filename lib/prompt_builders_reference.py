@@ -9,13 +9,17 @@
 两级 prompt 注入的引用语法规范取自同一份常量
 （``lib.reference_video.writing_syntax.writing_syntax_spec``）：LLM 产出与人在编辑器写的
 是同一种格式，语法只能有一份措辞，本模块不复写。
+- shot-to-shot 连续性与运镜规则由 lib.prompt_rules.shot_continuity 注入，
+  与 drama / narration 两条 prompt_authoring 共享同一份文本。
 """
 
 from __future__ import annotations
 
 from lib.prompt_builders_script import _neutralize_tags
 from lib.prompt_rules.asset_appearance import asset_reference_names, iter_asset_appearances
+from lib.prompt_rules.audience_gear import render_audience_section
 from lib.prompt_rules.episode_target_duration import render_episode_target_duration_rule
+from lib.prompt_rules.shot_continuity import render_shot_continuity_rules
 from lib.reference_video.writing_syntax import writing_syntax_spec
 from lib.speech_rate import speech_rate_units_per_second
 from lib.text_metrics import reading_unit_noun
@@ -318,6 +322,7 @@ def build_reference_video_prompt(
     episode: int,
     aspect_ratio: str = "9:16",
     target_language: str = "中文",
+    audience: str | None = None,
 ) -> str:
     """构建参考生视频 prompt_authoring（提示词编写）的 LLM Prompt。
 
@@ -331,7 +336,13 @@ def build_reference_video_prompt(
         script_plan_units: 结构化 script_plan units（``script_plan_reference_units.json`` 经校验后的 dict 列表），
             由 ``render_reference_units_for_prompt_authoring`` 机械渲染进 prompt。
         max_refs: 当前视频模型支持的最大参考图数；为 None 时不写入硬性数量约束。
+        audience: 解析好的受众文本（见 ``lib.project_audience.resolve_project_audience_text``），经
+            ``render_audience_section`` 判定是否命中儿童 gear；非儿童受众 / 未设时该函数回空串，
+            prompt 与不带该参数时逐字相同。
     """
+    audience_block = render_audience_section(audience)
+    if audience_block:
+        audience_block += "\n\n"
     max_refs_line = (
         f"\n- 单个 unit 的**画面描述里** `@` 引用的资产名（去重后）不超过 {max_refs} 个（模型上限）；"
         "台词记号 `@[角色]{台词}` 的说话人不计入——它不生成参考图，只驱动音色声明。"
@@ -339,6 +350,7 @@ def build_reference_video_prompt(
         if max_refs is not None
         else ""
     )
+    continuity_block = render_shot_continuity_rules() + "\n\n"
 
     return f"""# 角色与任务
 
@@ -355,7 +367,7 @@ def build_reference_video_prompt(
   台词配不上你想要的画面时，请按台词写画面——**不要**改台词。
 - 正文里新出现的 `@[名称]` 必须是候选表中的登记名（script_plan 没引用过的资产也可以引用，但必须已登记）。{max_refs_line}
 
-# 上下文
+{continuity_block}{audience_block}# 上下文
 
 <overview>
 {project_overview.get("synopsis", "")}

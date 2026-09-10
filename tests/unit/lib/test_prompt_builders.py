@@ -26,6 +26,23 @@ class TestCharacterPrompt:
         assert "古风" in prompt
         assert "Cinematic, low-key lighting" in prompt
 
+    def test_guards_pose_expression_props_and_environment(self):
+        prompt = build_character_prompt("姜月茴", "黑发，冷静神态。")
+        assert "中性表情" in prompt
+        assert "中性站姿" in prompt
+        assert "不手持道具" in prompt
+        assert "不出现背景或环境元素" in prompt
+
+    def test_audience_absent_by_default_is_byte_identical(self):
+        with_default = build_character_prompt("姜月茴", "黑发，冷静神态。", style="古风")
+        with_explicit_empty = build_character_prompt("姜月茴", "黑发，冷静神态。", style="古风", audience="")
+        assert with_default == with_explicit_empty
+        assert "目标受众" not in with_default
+
+    def test_audience_injects_raw_line_next_to_style(self):
+        prompt = build_character_prompt("姜月茴", "黑发，冷静神态。", style="古风", audience="儿童 6-10 岁")
+        assert "目标受众：儿童 6-10 岁" in prompt
+
 
 class TestScenePromptAndPropPrompt:
     def test_prop_includes_supplied_details(self):
@@ -33,13 +50,32 @@ class TestScenePromptAndPropPrompt:
         assert "玉佩" in prompt
         assert "古朴温润" in prompt
 
+    def test_prop_guards_single_centered_no_hands_no_people_no_environment(self):
+        prompt = build_prop_prompt("玉佩", "古朴温润")
+        assert "单个道具居中呈现" in prompt
+        assert "不出现手部、人物或环境背景" in prompt
+
     def test_scene_includes_supplied_details(self):
         prompt = build_scene_prompt("祠堂", "昏暗古朴")
         assert "祠堂" in prompt
         assert "昏暗古朴" in prompt
 
-    def test_empty_prop_guard_does_not_add_a_blank_paragraph(self):
+    def test_scene_guards_no_characters_no_labels_arrows_or_placeholders(self):
+        prompt = build_scene_prompt("祠堂", "昏暗古朴")
+        assert "画面中没有人物出镜" in prompt
+        assert "不出现标签、箭头或占位符文字" in prompt
+
+    def test_prop_guard_does_not_add_a_blank_paragraph(self):
         assert "\n\n\n" not in build_prop_prompt("玉佩", "古朴温润")
+
+    def test_scene_audience_injects_raw_line(self):
+        prompt = build_scene_prompt("祠堂", "昏暗古朴", audience="儿童 6-10 岁")
+        assert "目标受众：儿童 6-10 岁" in prompt
+
+    def test_prop_audience_absent_by_default_is_byte_identical(self):
+        with_default = build_prop_prompt("玉佩", "古朴温润")
+        with_explicit_empty = build_prop_prompt("玉佩", "古朴温润", audience="")
+        assert with_default == with_explicit_empty
 
 
 class TestFigureExclusion:
@@ -98,11 +134,20 @@ class TestImageNegativeTail:
 
 class TestNegativeTailsAreAvoidKeys:
     def test_image_and_video_tails_are_avoid_lines(self):
-        assert append_image_negative_tail("") == "Avoid: 水印、多余文字、Logo"
-        assert append_video_negative_tail("") == "Avoid: BGM、文字字幕、水印"
+        assert (
+            append_image_negative_tail("")
+            == "Avoid: 水印、多余文字、Logo、字幕、标题、拼贴、分屏、多余人物、人物直视镜头（除非剧本明确打破第四面墙）"
+        )
+        assert (
+            append_video_negative_tail("")
+            == "Avoid: BGM、水印、多余文字、Logo、字幕、标题、拼贴、分屏、多余人物、人物直视镜头（除非剧本明确打破第四面墙）、镜头之间叠化/交叉溶解/淡入淡出、前后画面透明重叠"
+        )
 
     def test_text_form_appends_one_avoid_line(self):
-        assert append_video_negative_tail("林清缓缓抬头") == "林清缓缓抬头\n\nAvoid: BGM、文字字幕、水印"
+        assert (
+            append_video_negative_tail("林清缓缓抬头")
+            == "林清缓缓抬头\n\nAvoid: BGM、水印、多余文字、Logo、字幕、标题、拼贴、分屏、多余人物、人物直视镜头（除非剧本明确打破第四面墙）、镜头之间叠化/交叉溶解/淡入淡出、前后画面透明重叠"
+        )
 
 
 def _sheet(asset_type: str, name: str) -> VisualReference:
@@ -144,7 +189,7 @@ class TestRenderStoryboardImagePrompt:
             "  shot_type: Medium Shot\n"
             "  lighting: 右侧落地窗逆光，蓝灰色调\n"
             "  ambiance: 雨天，室内昏暗\n"
-            "Avoid: 水印、多余文字、Logo"
+            "Avoid: 水印、多余文字、Logo、字幕、标题、拼贴、分屏、多余人物、人物直视镜头（除非剧本明确打破第四面墙）"
         )
 
     def test_product_images_lead_the_numbering_and_replace_the_fidelity_tail(self):
@@ -192,7 +237,7 @@ class TestRenderStoryboardImagePrompt:
             "Visual style: cinematic\n"
             "Reference_Images: 图1为角色参考图；图2为上一分镜图，只参考构图与色调。\n\n"
             "图1坐在窗边木桌前\n\n"
-            "Avoid: 水印、多余文字、Logo"
+            "Avoid: 水印、多余文字、Logo、字幕、标题、拼贴、分屏、多余人物、人物直视镜头（除非剧本明确打破第四面墙）"
         )
 
     def test_rendering_a_rendered_text_again_is_idempotent(self):
@@ -204,3 +249,22 @@ class TestRenderStoryboardImagePrompt:
             render_storyboard_image_prompt(once, style="Anime", style_description="cinematic", references=references)
             == once
         )
+
+    def test_audience_absent_by_default_is_byte_identical(self):
+        with_default = render_storyboard_image_prompt(_STRUCTURED, style="Anime")
+        with_explicit_empty = render_storyboard_image_prompt(_STRUCTURED, style="Anime", audience="")
+        assert with_default == with_explicit_empty
+        assert "Audience" not in with_default
+
+    def test_structured_prompt_audience_line_follows_style(self):
+        rendered = render_storyboard_image_prompt(_STRUCTURED, style="Anime", audience="儿童 6-10 岁")
+        assert rendered.startswith("Style: Anime\nAudience: 儿童 6-10 岁\n")
+
+    def test_text_form_audience_line_follows_style(self):
+        rendered = render_storyboard_image_prompt("@[林清]坐在窗边木桌前", style="Anime", audience="儿童 6-10 岁")
+        assert "Style: Anime\n" in rendered
+        assert "Audience: 儿童 6-10 岁\n" in rendered
+
+    def test_rendering_a_rendered_text_again_with_audience_is_idempotent(self):
+        once = render_storyboard_image_prompt(_STRUCTURED, style="Anime", audience="儿童 6-10 岁")
+        assert render_storyboard_image_prompt(once, style="Anime", audience="儿童 6-10 岁") == once

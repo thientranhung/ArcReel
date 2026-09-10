@@ -11,6 +11,7 @@ from lib.prompt_rules.episode_target_duration import (
     EPISODE_TARGET_DURATION_RULE_TEMPLATE,
     render_episode_target_duration_rule,
 )
+from lib.prompt_rules.shot_continuity import render_shot_continuity_rules
 from lib.reference_video.writing_syntax import scene_reference_rules, writing_syntax_spec
 
 
@@ -79,6 +80,11 @@ def test_build_reference_video_prompt_contains_required_sections():
     assert "不超过 9 个（模型上限）" in prompt
 
 
+def test_build_reference_video_prompt_injects_shot_continuity_rules():
+    text = _prompt_authoring_prompt()
+    assert "".join(render_shot_continuity_rules().split()) in "".join(text.split())
+
+
 def test_build_reference_video_prompt_emphasizes_no_appearance_description():
     assert "外貌" in _prompt_authoring_prompt()
 
@@ -105,6 +111,19 @@ def test_build_reference_video_prompt_omits_duration_from_output_contract():
 
 def test_build_reference_video_prompt_max_refs_none_skips_rule():
     assert "模型上限" not in _prompt_authoring_prompt(max_refs=None)
+
+
+def test_build_reference_video_prompt_has_no_audience_block_by_default():
+    assert "面向儿童" not in _prompt_authoring_prompt()
+
+
+def test_build_reference_video_prompt_renders_kids_gear_when_audience_indicates_children():
+    prompt = _prompt_authoring_prompt(audience="儿童 6-10 岁")
+    assert "面向儿童（约 6-10 岁）观众的创作规则" in prompt
+
+
+def test_build_reference_video_prompt_ignores_adult_audience():
+    assert "面向儿童" not in _prompt_authoring_prompt(audience="都市情感，成年观众")
 
 
 def test_build_reference_units_split_prompt_contains_constraints_and_candidates():

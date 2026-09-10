@@ -12,6 +12,7 @@ from lib.config.cost_thresholds import cost_thresholds_usd
 from lib.cost_estimate import UnitCostInput, aggregate_cost_estimate
 from lib.generation_result import GenerationAction, GenerationProblem, ProviderCheckpoint
 from lib.narration_delivery import POST_PRODUCTION, USE_TTS, NarrationDelivery
+from lib.prompt_rules.asset_identity_rules import render_asset_identity_rules
 from lib.workflow_rules import WorkflowStepRule, workflow_rule
 from lib.workflow_state import (
     WorkflowActionType,
@@ -145,6 +146,18 @@ _TASK_STEP: dict[str, str] = {
     "video": "video",
     "reference_video": "video",
 }
+
+
+def _with_authoring_rules(action: WorkflowNextAction) -> WorkflowNextAction:
+    """``analyze_assets`` 动作的 ``args`` 里带上资产 description 的身份锚定规则。
+
+    内嵌 Agent 的 `analyze-assets` 子智能体从 `agent_runtime_profile/.claude/references/`
+    读规则正文；远端 MCP 客户端（如 `video-workflow` skill）自己写 description、不跑该子智能体，
+    只能从这里的 plan payload 拿到同一份规则，否则规则只覆盖内嵌路径。其余动作类型原样返回。
+    """
+    if action.type is not WorkflowActionType.ANALYZE_ASSETS:
+        return action
+    return action.model_copy(update={"args": {**action.args, "authoring_rules": render_asset_identity_rules()}})
 
 
 def _baseline_step_state(
@@ -340,7 +353,7 @@ def build_workflow_plan(
             id=step_rule.id,
             state=_baseline_step_state(step_rule, index=index, current_index=current_index, status=status),
             required=step_rule.applicable,
-            action=status.next_action if step_rule.checkpoint == status.state else None,
+            action=_with_authoring_rules(status.next_action) if step_rule.checkpoint == status.state else None,
             requested_ids=(list(status.next_action.requested_ids) if step_rule.checkpoint == status.state else []),
             artifacts=dict(status.artifacts.get(artifact_key, {})) if artifact_key is not None else {},
             contracts=(
@@ -453,6 +466,7 @@ def build_workflow_plan(
         for step in steps:
             if step.action is original_next_action:
                 step.action = next_action
+    next_action = _with_authoring_rules(next_action)
 
     return WorkflowPlan(
         status=status,

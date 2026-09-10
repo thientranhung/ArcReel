@@ -40,6 +40,41 @@ POST_PRODUCTION = "post_production"
 USE_TTS = "use_tts"
 NarrationDelivery = Literal["post_production", "use_tts"]
 
+SceneAudioMode = Literal["model", "tts"]
+ResolvedSceneAudio = Literal["model", "tts", "none"]
+
+
+def resolve_scene_audio_mode(
+    scene_mode: SceneAudioMode | None,
+    project_default: SceneAudioMode,
+    *,
+    has_clip_audio: bool,
+    has_tts: bool,
+) -> ResolvedSceneAudio:
+    """Decide one scene's composed audio source under the hard fallback rule.
+
+    ``scene_mode`` is the per-scene ``audio_mode`` override (``None`` defers to
+    ``project_default``). The rule never produces a silently empty scene when a
+    usable source exists, and never fabricates a source that is not there:
+
+    - no clip audio stream and no usable TTS selected -> ``"none"`` (nothing to keep)
+    - effective mode ``"model"`` -> keep the clip's native audio (``"model"``),
+      or ``"none"`` if the clip has no audio stream
+    - effective mode ``"tts"`` with TTS available -> ``"tts"`` (mix/prefer narration)
+    - effective mode ``"tts"`` without TTS yet -> fall back to native audio
+      (``"model"``), or ``"none"`` if the clip has no audio stream either
+    """
+
+    if scene_mode is not None and scene_mode not in ("model", "tts"):
+        assert_never(scene_mode)
+    if project_default not in ("model", "tts"):
+        assert_never(project_default)
+
+    effective = scene_mode if scene_mode is not None else project_default
+    if effective == "tts" and has_tts:
+        return "tts"
+    return "model" if has_clip_audio else "none"
+
 
 @dataclass(frozen=True, slots=True)
 class NarrationDeliveryRequestOptions:
@@ -817,6 +852,8 @@ __all__ = [
     "NarrationDeliveryProblem",
     "NarrationDeliveryRequestOptions",
     "NarrationTtsStatus",
+    "ResolvedSceneAudio",
+    "SceneAudioMode",
     "TtsSettingsResolver",
     "TtsSynthesisSettings",
     "VideoRequestCostFacts",
@@ -829,5 +866,6 @@ __all__ = [
     "prepare_narrated_video_output",
     "prepare_narration_delivery",
     "register_narration_audio_transactionally",
+    "resolve_scene_audio_mode",
     "resolve_tts_synthesis_settings",
 ]

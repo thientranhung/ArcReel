@@ -15,6 +15,8 @@ from lib.logging_utils import format_kwargs_for_log
 from lib.providers import PROVIDER_ARK
 from lib.retry import with_retry_async
 from lib.video_backends.base import (
+    AmbiguousSubmitError,
+    ProviderGenerationFailedError,
     ProviderJobIdPersistenceMixin,
     ReferenceAudioMode,
     ResumeExpiredError,
@@ -23,6 +25,7 @@ from lib.video_backends.base import (
     VideoGenerationRequest,
     VideoGenerationResult,
     download_video,
+    is_retryable_http_status,
     poll_with_retry,
     reference_audio_to_data_uri,
     should_retry_download,
@@ -53,6 +56,23 @@ _SEEDANCE_2_5_MAX_REFERENCE_AUDIO_TOTAL_SECONDS = 30.0
 # 与 dashscope 侧的同名表刻意各存一份：mp3 在这里按官方示例写 audio/mp3，dashscope 走标准
 # 的 audio/mpeg——供应商各自的接受口径，合并成一张共享表会让其中一家收到没验证过的 MIME。
 _REFERENCE_AUDIO_MIME_TYPES = {".wav": "audio/wav", ".mp3": "audio/mp3"}
+
+
+def _should_retry_ark_submit(exc: Exception) -> bool:
+    """`_create_task`（非幂等「创建 + 计费」调用）重试谓词，判据与 ``should_retry_submit`` 同口径。
+
+    volcenginesdkarkruntime（fork 自 openai-python）在其 ``_base_client._request`` 里把
+    ``httpx.TimeoutException``（ConnectTimeout 与 ReadTimeout 同归一类）一律包成
+    ``ArkAPITimeoutError``，把其余传输异常一律包成 ``ArkAPIConnectionError``——SDK 不透传底层
+    httpx 异常类型，无法像 submit_post 那样按「连接建立失败 / 请求已发出」分流。这两类异常都不带
+    ``status_code`` 属性，在 ``_create_task`` 内已被转成 ``AmbiguousSubmitError`` 终态失败，
+    走不到本谓词。唯有服务端已明确响应的 ``ArkAPIStatusError``（带 ``status_code``）才按
+    ``is_retryable_http_status`` 分流重试；其余异常一律不重试。
+    """
+    status_code = getattr(exc, "status_code", None)
+    if isinstance(status_code, int):
+        return is_retryable_http_status(status_code, retry_not_found=False)
+    return False
 
 
 def _retry_ark_download(exc: Exception) -> bool:
@@ -311,9 +331,9 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
                 raise ResumeExpiredError(job_id=job_id, provider=PROVIDER_ARK) from exc
             raise
 
-    @with_retry_async()
+    @with_retry_async(retry_if=_should_retry_ark_submit)
     async def _create_task(self, request: VideoGenerationRequest) -> str:
-        """创建 Ark 视频生成任务（带重试保护）。"""
+        """创建 Ark 视频生成任务（非幂等「创建 + 计费」调用，重试判据见 ``_should_retry_ark_submit``）。"""
         # 1. Build content list
         content: list[dict[str, Any]] = [{"type": "text", "text": request.prompt}]
 
@@ -422,10 +442,20 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
         logger.info(
             "调用 %s 视频 SDK kwargs=%s", self.name, format_kwargs_for_log(_safe_create_params_for_log(create_params))
         )
-        create_result = await asyncio.to_thread(
-            self._client.content_generation.tasks.create,
-            **create_params,
-        )
+        try:
+            create_result = await asyncio.to_thread(
+                self._client.content_generation.tasks.create,
+                **create_params,
+            )
+        except Exception as exc:
+            # 带 status_code 的 ArkAPIStatusError：服务端已明确响应，非歧义态，原样抛出交
+            # _should_retry_ark_submit 按 status_code 分流。其余异常（ArkAPIConnectionError /
+            # ArkAPITimeoutError 及包装它们的传输错误）SDK 不区分连接建立失败与发出后超时/
+            # 中断，无法证明请求未送达——保守按「请求可能已送达服务端并已计费」处理，转
+            # AmbiguousSubmitError 终态失败，不自动重试。
+            if isinstance(getattr(exc, "status_code", None), int):
+                raise
+            raise AmbiguousSubmitError(provider=PROVIDER_ARK) from exc
         logger.info("Ark 任务已创建: %s", create_result.id)
         return create_result.id
 
@@ -443,11 +473,7 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
         result = await poll_with_retry(
             poll_fn=lambda: asyncio.to_thread(self._client.content_generation.tasks.get, task_id=task_id),
             is_done=lambda r: r.status == "succeeded",
-            is_failed=lambda r: (
-                f"Ark 视频生成失败(status={r.status}): {getattr(r, 'error', None) or 'Unknown error'}"
-                if r.status in ("failed", "expired")
-                else None
-            ),
+            is_failed=lambda r: _ark_generation_failure(r) if r.status in ("failed", "expired") else None,
             max_wait=request.poll_timeout_seconds,
             label="Ark",
             on_progress=lambda r, elapsed: logger.info(
@@ -476,6 +502,33 @@ class ArkVideoBackend(ProviderJobIdPersistenceMixin):
             task_id=task_id,
             generate_audio=request.generate_audio,
         )
+
+
+def _ark_generation_failure(r: Any) -> ProviderGenerationFailedError:
+    """把 Ark 轮询终态失败响应包成结构化异常，原文与机器码分列存放。
+
+    Ark SDK 的 ``ContentGenerationError`` 有 ``code`` / ``message`` 两个字段（见
+    ``volcenginesdkarkruntime.types.content_generation.content_generation_task``），但轮询
+    响应上的 ``error`` 字段在旧路径/测试替身里也可能只是一段裸字符串——两种形态都要兜住，
+    取不到结构化 ``code`` 时退回 ``None``，``message`` 退回 ``str(error)``。
+    """
+    error = getattr(r, "error", None)
+    code = getattr(error, "code", None)
+    message = getattr(error, "message", None)
+    provider_code = code.strip() if isinstance(code, str) and code.strip() else None
+    if isinstance(message, str) and message.strip():
+        provider_message = message.strip()
+    elif error is not None:
+        provider_message = str(error)
+    else:
+        provider_message = "Unknown error"
+    return ProviderGenerationFailedError(
+        provider=PROVIDER_ARK,
+        label="Ark",
+        status=r.status,
+        provider_code=provider_code,
+        provider_message=provider_message,
+    )
 
 
 def _is_ark_not_found(exc: BaseException) -> bool:

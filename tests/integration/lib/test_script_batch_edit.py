@@ -343,6 +343,38 @@ def test_invalid_operation_at_any_position_writes_nothing(
     assert not (project_dir / ".arcreel_artifacts.json").exists()
 
 
+def test_update_patches_scene_audio_mode_override(
+    editor: tuple[ProjectManager, ScriptBatchEditor, Path],
+) -> None:
+    pm, service, _project_dir = editor
+
+    result = service.execute(
+        "demo",
+        _command(pm, [{"op": "update", "id": "E1S01", "fields": {"audio_mode": "tts"}}]),
+    )
+
+    assert result.success is True
+    saved = pm.load_script("demo", "episode_1.json")
+    assert saved["segments"][0]["audio_mode"] == "tts"
+    # unset segments are unaffected (byte-identical behaviour when no override is set)
+    assert "audio_mode" not in saved["segments"][1] or saved["segments"][1]["audio_mode"] is None
+
+
+def test_update_rejects_unsupported_scene_audio_mode_value(
+    editor: tuple[ProjectManager, ScriptBatchEditor, Path],
+) -> None:
+    pm, service, project_dir = editor
+    before = (project_dir / "scripts" / "episode_1.json").read_bytes()
+
+    result = service.execute(
+        "demo",
+        _command(pm, [{"op": "update", "id": "E1S01", "fields": {"audio_mode": "bogus"}}]),
+    )
+
+    assert result.success is False
+    assert (project_dir / "scripts" / "episode_1.json").read_bytes() == before
+
+
 def test_invalid_second_field_reports_exact_operation_field(
     editor: tuple[ProjectManager, ScriptBatchEditor, Path],
 ) -> None:
