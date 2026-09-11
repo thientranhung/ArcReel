@@ -589,4 +589,44 @@ describe("ProjectsPage", () => {
     const cells = Array.from(hero.children).map((cell) => cell.textContent);
     expect(cells).toEqual(["项目5", "准备2", "脚本1", "制作1", "完成1"]);
   });
+
+  it("renders the delete-failed toast with the interpolated message", async () => {
+    const demoProject = {
+      name: "demo",
+      title: "Demo Project",
+      style: "Anime",
+      style_template_id: "anim_kyoto",
+      thumbnail: null,
+      status: {
+        phase: "production" as Phase,
+        phase_progress: 0.5,
+        needs_repair: false,
+        repair_reason: null,
+        assets: {
+          character: { total: 2, available: 2, stale: 0 },
+          scene: { total: 1, available: 1, stale: 0 },
+          prop: { total: 1, available: 0, stale: 0 },
+        },
+        episodes_summary: { total: 1, scripted: 1, in_production: 1, completed: 0 },
+      },
+    };
+    vi.spyOn(API, "listProjects").mockResolvedValue({
+      projects: [
+        { ...demoProject, name: "featured", title: "Featured Project" },
+        demoProject,
+      ],
+    });
+    vi.spyOn(API, "deleteProject").mockRejectedValue(new Error("Invalid project name 'demo'"));
+
+    renderPage();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "项目操作 — Demo Project" }));
+    await user.click(await screen.findByRole("button", { name: "删除项目 — Demo Project" }));
+    await user.click(await screen.findByRole("button", { name: "删除项目" }));
+
+    await waitFor(() => {
+      const toast = useAppStore.getState().toast;
+      expect(toast?.text).toBe("删除失败: [Demo Project] Invalid project name 'demo'");
+    });
+  });
 });

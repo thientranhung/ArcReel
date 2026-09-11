@@ -733,7 +733,7 @@ class TestRepairAllSymlinks:
     def test_skips_underscore_prefixed_dirs(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         """``_global_assets`` 等下划线开头的保留目录不是项目，不该 sync。
 
-        现有 ``list_projects`` 用 ``not startswith((".", "_"))`` 规则；
+        现有 ``list_projects`` 只收合法项目标识（``PROJECT_NAME_PATTERN``）；
         ``sync_all_agent_profiles`` 必须对齐，否则会在 ``_global_assets/`` 下
         无意义创建 ``.claude/``、``CLAUDE.md``、manifest。
         """

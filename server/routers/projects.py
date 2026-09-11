@@ -1133,6 +1133,8 @@ async def delete_project(name: str, _t: Translator):
         return await asyncio.to_thread(_sync)
     except FileNotFoundError as exc:
         raise NotFoundError("project_not_found", name=name) from exc
+    except ValueError as exc:
+        raise BadRequestError("invalid_project_name", name=name) from exc
     except (HTTPException, ApiError):
         raise
     except Exception as exc:
