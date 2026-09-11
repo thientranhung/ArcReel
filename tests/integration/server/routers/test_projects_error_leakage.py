@@ -90,6 +90,14 @@ class TestUnexpectedErrorsDoNotLeak:
             assert resp.status_code == 500
             assert sentinel not in self._body(resp)
 
+    def test_delete_project_invalid_identifier_maps_to_400(self, tmp_path, monkeypatch):
+        # 名字不合法（如 app 数据目录 trial_runs）时 ProjectManager 抛 ValueError，是请求问题不是服务器故障
+        client = build_projects_client(monkeypatch, _FakePM(tmp_path))
+        with client:
+            resp = client.delete("/api/v1/projects/illegal-name")
+            assert resp.status_code == 400
+            assert "illegal-name" in self._body(resp)
+
     def test_get_script_unexpected_error_maps_to_500(self, tmp_path, monkeypatch):
         sentinel = "LEAKED_SECRET_get_script"
         client = build_projects_client(monkeypatch, _FakePM(tmp_path))

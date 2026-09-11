@@ -386,8 +386,17 @@ class ProjectManager:
         self._script_writer = script_writer
 
     def list_projects(self) -> list[str]:
-        """列出所有项目"""
-        return [d.name for d in self.projects_root.iterdir() if d.is_dir() and not d.name.startswith((".", "_"))]
+        """列出所有项目：只收合法项目标识（``PROJECT_NAME_PATTERN``）的目录。
+
+        projects 根目录与 ``app_data_dir()`` 默认同一位置，``trial_runs/`` 等应用数据目录以及
+        ``_global_assets`` / 隐藏目录都不是项目；名字不合法的目录既不能被加载也不能被删除，
+        列出来只会在 UI 上变成一张无法操作的卡片。
+        """
+        return [
+            d.name
+            for d in self.projects_root.iterdir()
+            if d.is_dir() and PROJECT_NAME_PATTERN.fullmatch(d.name) is not None
+        ]
 
     def get_global_assets_root(self) -> Path:
         """返回全局资产根目录，并确保 character/scene/prop 子目录存在。"""
@@ -573,10 +582,10 @@ class ProjectManager:
             "migrated_total",
         )
         for project_dir in sorted(self.projects_root.iterdir()):
-            # 与 ``list_projects`` 同规则：跳过点开头（.git 等）和下划线开头
-            # （``_global_assets`` 保留目录 — 跨项目共享 character/scene/prop 库，
-            # 不是项目，不应物化 Agent profile）
-            if not project_dir.is_dir() or project_dir.name.startswith((".", "_")):
+            # 与 ``list_projects`` 同规则：只对合法项目标识的目录物化 Agent profile。
+            # ``.git`` / ``_global_assets``（跨项目共享资产库）/ ``trial_runs``（应用数据）
+            # 都不是项目，不应生成 ``.claude/``、``CLAUDE.md``、manifest。
+            if not project_dir.is_dir() or PROJECT_NAME_PATTERN.fullmatch(project_dir.name) is None:
                 continue
             try:
                 result = self.sync_agent_profile(project_dir)
